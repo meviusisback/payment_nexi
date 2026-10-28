@@ -46,9 +46,9 @@
     <field name="model" eval="False"/>
     <field name="inherit_id" ref="payment.method_form"/>
     <field name="arch" type="xml">
-      <xpath expr="//div[@name='o_payment_tokenize_container']" position="before">
+      <xpath expr="//div[p[@name='o_payment_secured_by']]" position="after">
         <t t-set="nexi_cards" t-value="provider_sudo.code == 'nexi' and request.env['payment.transaction'].sudo().get_nexi_saved_cards(partner_id) or []"/>
-        <div t-if="nexi_cards" class="w-100 d-flex flex-column gap-1 my-2 ms-4">
+        <div t-if="nexi_cards" class="d-flex flex-column gap-1 mt-2">
           <div class="small text-600">Le tue carte</div>
           <t t-foreach="nexi_cards" t-as="nc">
             <label class="d-flex align-items-center gap-2 fw-normal">
