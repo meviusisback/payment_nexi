@@ -130,6 +130,11 @@ class PaymentTransactionNexi(models.Model):
                 'amount': str(to_cents(self.amount)),
                 'currency': self.currency_id.name or 'EUR',
                 'description': (self.reference or '')[:100],
+                'customerId': 'C%010d' % (self.partner_id.id % 10000000000),
+                'customerInfo': {
+                    'cardHolderName': (self.partner_id.name or '')[:255],
+                    'cardHolderEmail': (self.partner_id.email or '')[:255],
+                },
             },
             'paymentSession': session,
         }
