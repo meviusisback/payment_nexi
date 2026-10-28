@@ -62,6 +62,53 @@ class PaymentProviderNexi(models.Model):
         help='URL produzione completo dalla scheda API su developer.nexi.it.',
         groups='base.group_system',
     )
+    # Esito ultima verifica metodi su Nexi. Solo lettura.
+    nexi_methods_report = fields.Text(
+        string='Metodi verificati', readonly=True,
+        help='Ultimo controllo su Nexi: quali paymentService il terminale accetta.',
+    )
+    nexi_methods_checked = fields.Datetime(string='Verifica del', readonly=True)
+
+    def button_nexi_check_methods(self):
+        """Prova ogni metodo su Nexi e nasconde quelli rifiutati dal terminale."""
+        self.ensure_one()
+        from .payment_transaction import METHOD_SERVICE
+        service_by_method = {}
+        for m in self.payment_method_ids.filtered(lambda x: x.is_primary):
+            if m.code in METHOD_SERVICE:
+                service_by_method[m] = METHOD_SERVICE[m.code]
+        if not service_by_method:
+            raise ValidationError(_('Nessun metodo Nexi da verificare.'))
+        base = self._nexi_base_url()
+        import time
+        lines = []
+        for method, service in sorted(service_by_method.items(), key=lambda x: x[0].name):
+            ref = 'CHECK-%s-%d' % (service, int(time.time()) % 100000)
+            payload = {
+                'order': {
+                    'orderId': ref, 'amount': '100', 'currency': 'EUR',
+                    'description': ref,
+                },
+                'paymentSession': {
+                    'actionType': 'PAY', 'amount': '100', 'language': 'ITA',
+                    'resultUrl': 'https://example.com/nexi/check',
+                    'cancelUrl': 'https://example.com/nexi/check',
+                    'captureType': 'IMPLICIT', 'paymentService': service,
+                },
+            }
+            try:
+                self._nexi_make_request('POST', base, payload)
+                ok = True
+                detail = 'attivo'
+            except ValidationError:
+                ok = False
+                detail = 'rifiutato dal terminale'
+            method.sudo().nexi_disabled = not ok
+            lines.append('%s (%s): %s' % (method.name, service, detail))
+        self.nexi_methods_report = '\n'.join(lines)
+        from odoo import fields as odoo_fields
+        self.nexi_methods_checked = odoo_fields.Datetime.now()
+        return True
 
     def _nexi_base_url(self):
         self.ensure_one()

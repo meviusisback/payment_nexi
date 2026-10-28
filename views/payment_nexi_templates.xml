@@ -31,7 +31,7 @@
   <!-- Cassa: preseleziona ultimo metodo + mostra carte salvate Nexi. -->
   <record id="view_payment_form_nexi" model="ir.ui.view">
     <field name="name">payment.form.nexi.saved</field>
-    <field name="model">ir.ui.view</field>
+    <field name="model" eval="False"/>
     <field name="inherit_id" ref="payment.form"/>
     <field name="arch" type="xml">
       <xpath expr="//t[@t-set='selected_method_id']" position="attributes">
@@ -80,6 +80,20 @@
         <field name="nexi_oneclick"/>
         <field name="nexi_test_url" placeholder="URL test da developer.nexi.it/it/api/..."/>
         <field name="nexi_prod_url" placeholder="URL produzione da developer.nexi.it/it/api/..."/>
+        <button name="button_nexi_check_methods" string="Verifica metodi su Nexi" type="object" class="oe_highlight"/>
+        <field name="nexi_methods_checked"/>
+        <field name="nexi_methods_report"/>
+      </xpath>
+    </field>
+  </record>
+  <!-- Spunta "nascosto" sul form metodo. -->
+  <record id="view_payment_method_nexi" model="ir.ui.view">
+    <field name="name">payment.method.nexi.form</field>
+    <field name="model">payment.method</field>
+    <field name="inherit_id" ref="payment.payment_method_form"/>
+    <field name="arch" type="xml">
+      <xpath expr="//field[@name='code']" position="after">
+        <field name="nexi_disabled"/>
       </xpath>
     </field>
   </record>
