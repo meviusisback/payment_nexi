@@ -314,6 +314,10 @@
                   if (f &amp;&amp; f.src &amp;&amp; frame &amp;&amp; !frame.children.length) {
                     frame.appendChild(iframeFor(f, '70px'));
                   }
+                  if (!frame || !frame.children.length) {
+                    var li = wrap.closest('li[name=o_payment_option]');
+                    if (li) li.style.display = 'none';
+                  }
                 });
                 var card = byId['PAY_WITH_CARD'];
                 var hb = document.getElementById('nexi-inline-buttons');
