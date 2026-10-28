@@ -14,10 +14,10 @@ Odoo non vede mai la carta. Semplice e veloce.
 
 ## Cosa NON fa (v1)
 
-- Niente token salvati.
 - Niente rimborso (`support_refund=none`).
 - Niente cattura manuale (`support_manual_capture=False`).
 - Solo EUR.
+- OneClick solo carte, con spunta cliente.
 
 ## Installa
 
@@ -28,8 +28,10 @@ Odoo non vede mai la carta. Semplice e veloce.
    - `X-Api-Key`: chiave test
    - `URL test Nexi`: es. `https://xpaysandbox.nexigroup.com/api/phoenix-0.0/psp/api/v1/orders/hpp`
    - Incasso: Automatico
+   - Modalità: Hosted Page (Build solo con URL pubblico)
+   - OneClick: acceso se vuoi `Salva carta`
    - Pubblica.
-4. Collega metodo `Carta via Nexi`.
+4. I 7 metodi arrivano da soli: Carta, Google Pay, Apple Pay, Bancomat Pay, MyBank, PayPal, PayPal 3 rate.
 5. Collega riga pagamento Bank a Nexi (serve per creare pagamento).
 
 ## Prova
@@ -57,18 +59,21 @@ Ordine test vero:
 - Niente review prima. Rimozione solo su abusi R1-R6.
 - Manca `icon.png` 1024x1024: aggiungi in `static/description/` prima di pubblicare.
 
-## Metodi di pagamento
+## Metodi di pagamento (da tabella Nexi)
 
-- Vuoto in `Metodo preselezionato` = tutti i metodi del terminale.
-- Scrivi un valore tabella Nexi per mostrare solo quello (es. `GOOGLEPAY`).
-- Passato come `paymentService` in `POST /orders/hpp`.
-- Solo maiuscole, cifre, underscore.
+- Arrivano da soli dal repo: Carta, Google Pay, Apple Pay, Bancomat Pay, MyBank, PayPal, PayPal 3 rate.
+- Ognuno manda già il suo `paymentService`: `CARDS, GOOGLEPAY, APPLEPAY, BANCOMATPAY, MYBANK, PAYPAL, PAYPAL_BNPL`.
+- Se in provider metti `Metodo preselezionato`, quello vince su tutto.
+- Loghi già dentro in `static/src/img/`.
 
-## OneClick CIT
+## OneClick CIT (con spunta cliente)
 
 - Attiva `OneClick CIT` sul provider.
-- Primo pagamento: crea contratto `CONTRACT_CREATION` tipo `CIT`.
-- Dopo: riusa `contractId` con `SUBSEQUENT_PAYMENT` via HPP.
+- Il cliente loggato vede `Save my payment details` solo su `Carta`.
+- Con spunta: primo paga e crea contratto `CONTRACT_CREATION` tipo `CIT`.
+- Senza spunta: paga normale, niente contratto.
+- Dopo: riusa `contractId` con `SUBSEQUENT_PAYMENT`.
+- Ospiti: niente spunta (limite Odoo), quindi niente contratto.
 - Importo zero con OneClick = `VERIFY`, nessun addebito.
 - `AUTHORIZED` resta autorizzato, non diventa incassato.
 
