@@ -259,6 +259,16 @@
           <script>
             (function () {
               var done = false;
+              var st = document.createElement('style');
+              st.textContent = '.nexi-build-row p[name="o_payment_secured_by"]{display:none}' +
+                '.nexi-build-apm span.rounded.overflow-hidden{display:none}';
+              document.head.appendChild(st);
+              document.querySelectorAll('.nexi-apm-inline, #nexi-inline').forEach(function (x) {
+                var li = x.closest('li[name=o_payment_option]');
+                if (!li) return;
+                li.classList.add('nexi-build-row');
+                if (x.classList.contains('nexi-apm-inline')) li.classList.add('nexi-build-apm');
+              });
               function submitBtn() { return document.querySelector('button[name="o_payment_submit_button"]'); }
               function showSubmit(show) {
                 var b = submitBtn();
