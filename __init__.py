@@ -34,7 +34,7 @@ def post_init_hook(env):
         if not os.path.isfile(path):
             continue
         method = Method.search([('code', '=', code)], limit=1)
-        if not method or method.image:
+        if not method:
             continue
         with open(path, 'rb') as f:
             method.write({'image': base64.b64encode(f.read())})
