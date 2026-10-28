@@ -184,7 +184,7 @@ class PaymentTransactionNexi(models.Model):
         provider = self.provider_id
         if not provider.nexi_api_key:
             raise ValidationError(_('Manca la X-Api-Key Nexi nel provider.'))
-        base = self.get_base_url()
+        base = processing_values.get('base_url') or self.get_base_url()
         suffix = processing_values.get('order_suffix') or ''
         session = {
             'actionType': 'VERIFY' if (provider.nexi_oneclick and not self.amount) else 'PAY',
@@ -249,7 +249,7 @@ class PaymentTransactionNexi(models.Model):
         if provider.nexi_mode == 'build' and (
             (self.payment_method_code or '') == 'card' or processing_values.get('force_build')
         ):
-            return self._nexi_render_build_values(res, provider, payload, want_save)
+            return self._nexi_render_build_values(res, provider, payload, want_save, processing_values)
         url = provider._nexi_base_url()
         try:
             data = self._nexi_post_order(provider, url, payload, want_save)
@@ -281,10 +281,11 @@ class PaymentTransactionNexi(models.Model):
         res.update(redirect_url=hosted, api_url=base, url_params=params)
         return res
 
-    def _nexi_render_build_values(self, res, provider, payload, want_save=False):
+    def _nexi_render_build_values(self, res, provider, payload, want_save=False, processing_values=None):
         """Ordine Build v3 embed: crea ordine e rimanda a template iframe."""
         self.ensure_one()
-        base = self.get_base_url()
+        processing_values = processing_values or {}
+        base = processing_values.get('base_url') or self.get_base_url()
         if 'localhost' in (base or '') or '127.0.0.1' in (base or ''):
             raise ValidationError(_('Build vuole URL pubblico, localhost non va. Usa HPP per i test locali.'))
         build_url = provider._nexi_build_url()

@@ -243,23 +243,68 @@
             });
           </script>
         </div>
-        <t t-if="pm_sudo.code == 'card' and provider_sudo.code == 'nexi' and provider_sudo.nexi_mode == 'build'">
-          <style>
-            li[name=o_payment_option]:has(.nexi-apm-inline) div[for="o_payment_radio"]{display:none !important}
-            li[name=o_payment_option]:has(.nexi-apm-inline) p[name="o_payment_secured_by"]{display:none !important}
-            li[name=o_payment_option]:has(.nexi-apm-inline) span.rounded.overflow-hidden{display:none !important}
-          </style>
-          <div id="nexi-inline" class="w-100 d-none">
-            <div id="nexi-inline-fields" class="d-flex flex-column gap-2 my-2">
-              <p class="small text-muted">Carico i campi carta…</p>
+      </xpath>
+    </field>
+  </record>
+
+  <!-- Campi credenziali nel form provider. -->
+  <record id="view_provider_nexi" model="ir.ui.view">
+    <field name="name">payment.provider.nexi.form</field>
+    <field name="model">payment.provider</field>
+    <field name="inherit_id" ref="payment.payment_provider_form"/>
+    <field name="arch" type="xml">
+      <xpath expr="//group[@name='provider_credentials']" position="inside">
+        <field name="nexi_api_key" password="True"/>
+        <field name="nexi_env"/>
+        <field name="nexi_capture"/>
+        <field name="nexi_mode"/>
+        <field name="nexi_payment_service" placeholder="Vuoto=tutti, es. GOOGLEPAY"/>
+        <field name="nexi_oneclick"/>
+        <field name="nexi_test_url" placeholder="URL test da developer.nexi.it/it/api/..."/>
+        <field name="nexi_prod_url" placeholder="URL produzione da developer.nexi.it/it/api/..."/>
+        <button name="button_nexi_check_methods" string="Verifica metodi su Nexi" type="object" class="oe_highlight"/>
+        <field name="nexi_methods_checked"/>
+        <field name="nexi_methods_report"/>
+      </xpath>
+    </field>
+  </record>
+  <!-- Spunta "nascosto" sul form metodo. -->
+  <record id="view_payment_method_nexi" model="ir.ui.view">
+    <field name="name">payment.method.nexi.form</field>
+    <field name="model">payment.method</field>
+    <field name="inherit_id" ref="payment.payment_method_form"/>
+    <field name="arch" type="xml">
+      <xpath expr="//field[@name='code']" position="after">
+        <field name="nexi_disabled"/>
+      </xpath>
+    </field>
+  </record>
+<!-- Build: campi carta e bottoni APM DENTRO la riga, fuori dal blocco nascosto. -->
+  <record id="view_payment_form_nexi_build" model="ir.ui.view">
+    <field name="name">payment.form.nexi.build.rows</field>
+    <field name="model" eval="False"/>
+    <field name="inherit_id" ref="payment.form"/>
+    <field name="arch" type="xml">
+      <xpath expr="//t[@t-call='payment.method_form']" position="after">
+        <t t-set="nexi_prov" t-value="providers_sudo.filtered(lambda p: p.code == 'nexi')[:1]"/>
+        <t t-if="nexi_prov and nexi_prov.nexi_mode == 'build'">
+          <t t-if="pm_sudo.code == 'card'">
+            <style>
+              li[name=o_payment_option]:has(.nexi-apm-inline) div[for="o_payment_radio"]{display:none !important}
+              li[name=o_payment_option]:has(.nexi-apm-inline) p[name="o_payment_secured_by"]{display:none !important}
+              li[name=o_payment_option]:has(.nexi-apm-inline) span.rounded.overflow-hidden{display:none !important}
+            </style>
+            <div id="nexi-inline" class="w-100 d-none">
+              <div id="nexi-inline-fields" class="d-flex flex-column gap-2 my-2">
+                <p class="small text-muted">Carico i campi carta…</p>
+              </div>
+              <label class="d-flex align-items-start gap-2 my-2 d-none" id="nexi-inline-privacy-wrap">
+                <input type="checkbox" id="nexi-inline-privacy" class="form-check-input mt-1"/>
+                <small>Ho letto l'informativa privacy Nexi (<a href="https://www.nexi.it/privacy/xpay.html" target="_blank">nexi.it/privacy/xpay</a>).</small>
+              </label>
+              <p id="nexi-inline-error" class="alert alert-danger mt-2 d-none"></p>
             </div>
-            <label class="d-flex align-items-start gap-2 my-2 d-none" id="nexi-inline-privacy-wrap">
-              <input type="checkbox" id="nexi-inline-privacy" class="form-check-input mt-1"/>
-              <small>Ho letto l'informativa privacy Nexi (<a href="https://www.nexi.it/privacy/xpay.html" target="_blank">nexi.it/privacy/xpay</a>).</small>
-            </label>
-            <p id="nexi-inline-error" class="alert alert-danger mt-2 d-none"></p>
-          </div>
-          <script>
+            <script>
             (function () {
               var done = false;
               window.addEventListener('error', function (e) {
@@ -437,46 +482,14 @@
               }, 12000);
             })();
           </script>
+          </t>
+          <t t-else="">
+            <div class="w-100 nexi-apm-inline d-none" t-att-data-method-code="pm_sudo.code">
+              <div class="nexi-apm-frame my-1"></div>
+              <p class="alert alert-danger mt-2 d-none"></p>
+            </div>
+          </t>
         </t>
-        <t t-if="pm_sudo.code != 'card' and provider_sudo.code == 'nexi' and provider_sudo.nexi_mode == 'build'">
-          <div class="w-100 nexi-apm-inline d-none" t-att-data-method-code="pm_sudo.code">
-            <div class="nexi-apm-frame my-2"></div>
-            <p class="alert alert-danger mt-2 d-none"></p>
-          </div>
-        </t>
-      </xpath>
-    </field>
-  </record>
-
-  <!-- Campi credenziali nel form provider. -->
-  <record id="view_provider_nexi" model="ir.ui.view">
-    <field name="name">payment.provider.nexi.form</field>
-    <field name="model">payment.provider</field>
-    <field name="inherit_id" ref="payment.payment_provider_form"/>
-    <field name="arch" type="xml">
-      <xpath expr="//group[@name='provider_credentials']" position="inside">
-        <field name="nexi_api_key" password="True"/>
-        <field name="nexi_env"/>
-        <field name="nexi_capture"/>
-        <field name="nexi_mode"/>
-        <field name="nexi_payment_service" placeholder="Vuoto=tutti, es. GOOGLEPAY"/>
-        <field name="nexi_oneclick"/>
-        <field name="nexi_test_url" placeholder="URL test da developer.nexi.it/it/api/..."/>
-        <field name="nexi_prod_url" placeholder="URL produzione da developer.nexi.it/it/api/..."/>
-        <button name="button_nexi_check_methods" string="Verifica metodi su Nexi" type="object" class="oe_highlight"/>
-        <field name="nexi_methods_checked"/>
-        <field name="nexi_methods_report"/>
-      </xpath>
-    </field>
-  </record>
-  <!-- Spunta "nascosto" sul form metodo. -->
-  <record id="view_payment_method_nexi" model="ir.ui.view">
-    <field name="name">payment.method.nexi.form</field>
-    <field name="model">payment.method</field>
-    <field name="inherit_id" ref="payment.payment_method_form"/>
-    <field name="arch" type="xml">
-      <xpath expr="//field[@name='code']" position="after">
-        <field name="nexi_disabled"/>
       </xpath>
     </field>
   </record>

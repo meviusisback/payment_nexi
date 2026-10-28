@@ -54,6 +54,12 @@ class NexiController(http.Controller):
         if not method:
             return {'error': 'Metodo carta mancante.'}
         Tx = request.env['payment.transaction'].sudo()
+        # Host vero con cui il browser sta navigando (tunnel compreso): Nexi
+        # confronta il dominio degli iframe con merchantUrl.
+        origin = (request.httprequest.host_url or '').rstrip('/')
+        if request.httprequest.headers.get('X-Forwarded-Proto') == 'https' and origin.startswith('http://'):
+            origin = 'https://' + origin[len('http://'):]
+        extra = {'base_url': origin} if origin else {}
         tx = Tx.search([
             ('sale_order_ids', 'in', order.id),
             ('provider_id', '=', provider.id),
@@ -75,17 +81,17 @@ class NexiController(http.Controller):
                 'sale_order_ids': [(6, 0, [order.id])],
             })
         try:
-            res_cards = tx._get_specific_rendering_values({
+            res_cards = tx._get_specific_rendering_values(dict({
                 'amount': tx.amount,
                 'currency_id': tx.currency_id.id,
                 'partner_id': tx.partner_id.id,
                 'reference': tx.reference,
                 'should_tokenize': False,
                 'force_build': True,
-            })
+            }, **extra))
             _logger = __import__('logging').getLogger(__name__ + '.prepare')
             _logger.warning('prepare %s card_fields=%s', tx.reference, len(res_cards.get('build_fields') or []))
-            res_buttons = tx._get_specific_rendering_values({
+            res_buttons = tx._get_specific_rendering_values(dict({
                 'amount': tx.amount,
                 'currency_id': tx.currency_id.id,
                 'partner_id': tx.partner_id.id,
@@ -94,7 +100,7 @@ class NexiController(http.Controller):
                 'force_build': True,
                 'no_service': True,
                 'order_suffix': '-m',
-            })
+            }, **extra))
         except Exception as e:
             import logging as _logging
             _logging.getLogger(__name__ + '.prepare').warning('prepare KO: %s', str(e)[:200])
