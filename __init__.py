@@ -14,6 +14,7 @@ def post_init_hook(env):
     Method = env['payment.method'].sudo()
     codes = [
         'card', 'googlepay', 'applepay', 'bancomatpay', 'mybank', 'paypal', 'paypal_bnpl',
+        'visa', 'mastercard', 'amex',
     ]
     methods = Method.search([('code', 'in', codes)])
     vals = {'payment_method_ids': [(6, 0, methods.ids)]} if methods else {}

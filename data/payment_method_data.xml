@@ -37,5 +37,23 @@
     <field name="code">paypal_bnpl</field>
     <field name="active">True</field>
   </record>
+  <record id="payment_method_nexi_visa" model="payment.method">
+    <field name="name">Visa</field>
+    <field name="code">visa</field>
+    <field name="active">True</field>
+    <field name="primary_payment_method_id" ref="payment_nexi.payment_method_nexi_card"/>
+  </record>
+  <record id="payment_method_nexi_mastercard" model="payment.method">
+    <field name="name">Mastercard</field>
+    <field name="code">mastercard</field>
+    <field name="active">True</field>
+    <field name="primary_payment_method_id" ref="payment_nexi.payment_method_nexi_card"/>
+  </record>
+  <record id="payment_method_nexi_amex" model="payment.method">
+    <field name="name">Amex</field>
+    <field name="code">amex</field>
+    <field name="active">True</field>
+    <field name="primary_payment_method_id" ref="payment_nexi.payment_method_nexi_card"/>
+  </record>
   </data>
 </odoo>
