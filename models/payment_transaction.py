@@ -24,6 +24,14 @@ METHOD_SERVICE = {
     'paypal': 'PAYPAL',
 }
 
+def _nexi_short(masked):
+    """Mostra solo ultime 4 cifre: **** 7289. Mai la carta vera."""
+    digits = re.sub(r'\D', '', str(masked or ''))
+    if len(digits) >= 4:
+        return '**** ' + digits[-4:]
+    return str(masked or 'Carta salvata')[:32]
+
+
 REF_RE = re.compile(r'^[A-Za-z0-9_-]{4,64}$')
 
 
@@ -101,7 +109,7 @@ class PaymentTransactionNexi(models.Model):
                 continue
             seen.add(tx.nexi_contract_id)
             cards.append({
-                'masked': tx.nexi_masked_pan or 'Carta salvata',
+                'masked': _nexi_short(tx.nexi_masked_pan),
                 'contract_id': tx.nexi_contract_id,
             })
         return cards
@@ -308,7 +316,7 @@ class PaymentTransactionNexi(models.Model):
                 self._set_error('Nexi incasso non completo.')
                 return
             if masked:
-                self.nexi_masked_pan = str(masked)[:32]
+                self.nexi_masked_pan = _nexi_short(masked)
             self._set_done(state_message=f'Nexi OK: {result}')
         elif result in AUTH_RESULTS:
             for op in (data or {}).get('operations', []):
@@ -319,7 +327,7 @@ class PaymentTransactionNexi(models.Model):
                         or False
                     )
                     if masked_auth:
-                        self.nexi_masked_pan = str(masked_auth)[:32]
+                        self.nexi_masked_pan = _nexi_short(masked_auth)
                     break
             self._set_authorized(state_message=f'Nexi autorizzato: {result}')
         elif result in KO_RESULTS:

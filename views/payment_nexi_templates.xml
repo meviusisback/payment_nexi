@@ -56,6 +56,10 @@
               <span><i class="fa fa-credit-card"/> <t t-esc="nc['masked']"/></span>
             </label>
           </t>
+          <label class="d-flex align-items-center gap-2 fw-normal">
+            <input type="radio" name="o_nexi_saved" checked="checked" class="form-check-input mt-0 nexi-saved-radio"/>
+            <span><i class="fa fa-plus"/> Usa una nuova carta</span>
+          </label>
           <script>
             document.addEventListener('change', function (ev) {
               if (!ev.target.classList || !ev.target.classList.contains('nexi-saved-radio')) return;
