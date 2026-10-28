@@ -185,12 +185,13 @@ class PaymentTransactionNexi(models.Model):
         if not provider.nexi_api_key:
             raise ValidationError(_('Manca la X-Api-Key Nexi nel provider.'))
         base = self.get_base_url()
+        suffix = processing_values.get('order_suffix') or ''
         session = {
             'actionType': 'VERIFY' if (provider.nexi_oneclick and not self.amount) else 'PAY',
             'amount': str(to_cents(self.amount)),
             'language': 'ITA',
-            'resultUrl': f'{base}/payment/nexi/confirm?ref={self.reference}',
-            'cancelUrl': f'{base}/payment/nexi/confirm?ref={self.reference}&cancel=1',
+            'resultUrl': f'{base}/payment/nexi/confirm?ref={self.reference}{suffix}',
+            'cancelUrl': f'{base}/payment/nexi/confirm?ref={self.reference}{suffix}&cancel=1',
             'captureType': 'EXPLICIT' if provider.nexi_capture == 'explicit' else 'IMPLICIT',
         }
         # Preselezione metodo: campo provider vince, se vuoto usa metodo scelto.
@@ -209,10 +210,11 @@ class PaymentTransactionNexi(models.Model):
         # I contratti CIT nascono dalla carta: riusarli con APM dà errore Nexi.
         # Primo pagamento con spunta = CONTRACT_CREATION.
         # Dopo riusa contractId con SUBSEQUENT_PAYMENT via HPP.
+        # no_service (bottoni condivisi): niente recurrence, solo bottoni.
         contract = False
         is_card = (self.payment_method_code or '') == 'card'
         want_save = bool(processing_values.get('should_tokenize')) if provider.nexi_oneclick else False
-        if provider.nexi_oneclick and is_card:
+        if provider.nexi_oneclick and is_card and not processing_values.get('no_service'):
             contract = self.nexi_contract_id or self._nexi_contract_for_partner(self.partner_id.id)
             if contract:
                 session['recurrence'] = {
@@ -229,7 +231,7 @@ class PaymentTransactionNexi(models.Model):
                 }
         payload = {
             'order': {
-                'orderId': self.reference,
+                'orderId': self.reference + (processing_values.get('order_suffix') or ''),
                 'amount': str(to_cents(self.amount)),
                 'currency': self.currency_id.name or 'EUR',
                 'description': (self.reference or '')[:100],
@@ -320,6 +322,10 @@ class PaymentTransactionNexi(models.Model):
         ref = (notification_data or {}).get('ref') or (notification_data or {}).get('orderId')
         if not ref or not REF_RE.match(str(ref)):
             raise ValidationError(_('Ritorno Nexi non valido.'))
+        full_ref = str(ref)
+        if full_ref.endswith('-m'):
+            notification_data['nexi_order_ref'] = full_ref
+            ref = full_ref[:-2]
         tx = self.search([('reference', '=', ref), ('provider_code', '=', 'nexi')])
         if not tx:
             raise ValidationError(_('Ritorno Nexi non valido.'))
@@ -332,11 +338,12 @@ class PaymentTransactionNexi(models.Model):
         # Non fidarti di cancel in URL: verifica sempre su Nexi.
         provider = self.provider_id
         create_url = provider._nexi_base_url()
+        order_ref = (notification_data or {}).get('nexi_order_ref') or self.reference
         if '/orders/hpp' in create_url:
-            verify_url = create_url.replace('/orders/hpp', f'/orders/{self.reference}')
+            verify_url = create_url.replace('/orders/hpp', f'/orders/{order_ref}')
         else:
             from urllib.parse import quote
-            verify_url = create_url.rstrip('/') + f'/orders/{quote(self.reference, safe="")}'
+            verify_url = create_url.rstrip('/') + f'/orders/{quote(order_ref, safe="")}'
         try:
             data = provider._nexi_make_request('GET', verify_url)
         except ValidationError as e:

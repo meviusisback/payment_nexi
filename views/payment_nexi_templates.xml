@@ -245,7 +245,6 @@
         </div>
         <t t-if="pm_sudo.code == 'card' and provider_sudo.code == 'nexi' and provider_sudo.nexi_mode == 'build'">
           <div id="nexi-inline" class="w-100 d-none">
-            <div id="nexi-inline-buttons" style="display:none;"></div>
             <div id="nexi-inline-fields" class="d-flex flex-column gap-2 my-2">
               <p class="small text-muted">Carico i campi carta…</p>
             </div>
@@ -306,79 +305,54 @@
                 }).then(function (r) { return r.json(); }
                 ).then(function (res) {
                   var r = (res &amp;&amp; res.result) || res || {};
-                  if (r.error || !r.fields || !r.fields.length) { done = false; fail(r.error || 'Form non caricato. Riprova.'); return; }
+                  if (r.error) { done = false; fail(r.error || 'Form non caricato. Riprova.'); return; }
                   box.dataset.finalize = r.finalize_url;
                   box.dataset.confirm = r.confirm_url;
-                  distribute(r.fields);
+                  distribute(r.buttons || []);
+                  var fb = document.getElementById('nexi-inline-fields');
+                  fb.innerHTML = '';
+                  (r.fields || []).forEach(function (f) {
+                    if (f &amp;&amp; f.src) fb.appendChild(iframeFor(f, '60px'));
+                  });
+                  if (fb.children.length) {
+                    document.getElementById('nexi-inline-privacy-wrap').classList.remove('d-none');
+                  } else {
+                    done = false; fail('Nessun campo carta disponibile.'); return;
+                  }
                   loadSdk(r.sdk, initBuild);
                 }).catch(function () { done = false; fail('Form non caricato. Riprova.'); });
               }
               var BTNMAP = {googlepay: 'GOOGLEPAY', applepay: 'APPLEPAY', bancomatpay: 'BANCOMATPAY', mybank: 'MYBANK', paypal: 'PAYPAL', paypal_bnpl: 'PAYPAL_PAGAIN3'};
-              function distribute(fields) {
+              function distribute(buttons) {
                 var byId = {};
-                (fields || []).forEach(function (f) { if (f &amp;&amp; f.id) byId[f.id] = f; });
+                (buttons || []).forEach(function (f) { if (f &amp;&amp; f.id) byId[f.id] = f; });
                 document.querySelectorAll('.nexi-apm-inline').forEach(function (wrap) {
                   var f = byId[BTNMAP[wrap.dataset.methodCode] || ''];
                   var frame = wrap.querySelector('.nexi-apm-frame');
-                  if (f &amp;&amp; f.src &amp;&amp; frame &amp;&amp; !frame.children.length) {
+                  if (f &amp;&amp; f.src &amp;&amp; frame) {
+                    frame.innerHTML = '';
                     frame.appendChild(iframeFor(f, '70px'));
-                  }
-                  if (!frame || !frame.children.length) {
+                    wrap.classList.remove('d-none');
+                  } else if (frame) {
                     var li = wrap.closest('li[name=o_payment_option]');
                     if (li) li.style.display = 'none';
                   }
                 });
-                var card = byId['PAY_WITH_CARD'];
-                var hb = document.getElementById('nexi-inline-buttons');
-                if (card &amp;&amp; card.src &amp;&amp; hb &amp;&amp; !hb.children.length) {
-                  hb.appendChild(iframeFor(card, '60px'));
-                }
               }
-                function tryCardClick() {
-                  if (window.__nexiCardReady) return;
-                  try { if (window.__nexiBuild) window.__nexiBuild.clickAction('PAY_WITH_CARD'); } catch (e) {}
-                }
                 function initBuild() {
-                var buildObj = null;
                 try {
-                  buildObj = new Build({
-                    onAllFieldsLoaded: function () { tryCardClick(); },
+                  window.__nexiBuild = new Build({
                     onBuildFlowStateChange: function (evtData, workflowState) {
                       var d = evtData || {};
                       var state = d.state || workflowState || '';
                       var box = document.getElementById('nexi-inline');
                       if (d.url) { window.location.href = d.url; return; }
-                      if (d.fieldSet &amp;&amp; d.fieldSet.fields) {
-                        window.__nexiCardReady = true;
-                        var fb = document.getElementById('nexi-inline-fields');
-                        fb.innerHTML = '';
-                        d.fieldSet.fields.forEach(function (f) {
-                          if (f.src) fb.appendChild(iframeFor(f, '60px'));
-                        });
-                        var mb2 = document.getElementById('nexi-inline-methods');
-                        if (mb2) mb2.style.display = 'none';
-                        document.getElementById('nexi-inline-privacy-wrap').classList.remove('d-none');
-                      }
                       if (state === 'READY_FOR_PAYMENT') { finalize(box); }
                       if (state === 'PAYMENT_COMPLETE') { window.location.href = box.dataset.confirm; }
                     },
                     onBuildError: function () { fail('Errore Nexi. Riprova.'); },
                     onConfirmError: function () { fail('Dati non validi. Controlla e riprova.'); },
                   });
-                  window.__nexiBuild = buildObj;
-                  var hbFrame = document.querySelector('#nexi-inline-buttons iframe');
-                  if (hbFrame) {
-                    if (hbFrame.addEventListener) hbFrame.addEventListener('load', tryCardClick);
-                    else hbFrame.onload = tryCardClick;
-                  }
-                  setTimeout(tryCardClick, 1500);
-                  setTimeout(tryCardClick, 3000);
-                  setTimeout(function () {
-                    if (!window.__nexiCardReady) {
-                      fail('Campi carta non caricati. Premi Pay now per continuare.');
-                      showSubmit(true);
-                    }
-                  }, 8000);
                 } catch (e) { fail('SDK Nexi non caricato. Riprova.'); return; }
                 var oForm = document.getElementById('o_payment_form');
                 if (oForm &amp;&amp; !oForm.dataset.nexiHook) {

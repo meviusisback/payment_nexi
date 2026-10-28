@@ -75,22 +75,31 @@ class NexiController(http.Controller):
                 'sale_order_ids': [(6, 0, [order.id])],
             })
         try:
-            res = tx._get_specific_rendering_values({
+            res_cards = tx._get_specific_rendering_values({
                 'amount': tx.amount,
                 'currency_id': tx.currency_id.id,
                 'partner_id': tx.partner_id.id,
                 'reference': tx.reference,
-                'should_tokenize': bool(tokenize),
+                'should_tokenize': False,
+                'force_build': True,
+            })
+            res_buttons = tx._get_specific_rendering_values({
+                'amount': tx.amount,
+                'currency_id': tx.currency_id.id,
+                'partner_id': tx.partner_id.id,
+                'reference': tx.reference,
+                'should_tokenize': False,
                 'force_build': True,
                 'no_service': True,
+                'order_suffix': '-m',
             })
         except Exception as e:
             return {'error': str(e)[:200]}
         host = 'https://xpaysandbox.nexigroup.com' if provider.nexi_env == 'test' else 'https://xpay.nexigroup.com'
         return {
             'tx': tx.reference,
-            'fields': res.get('build_fields') or [],
-            'url': res.get('build_url') or False,
+            'fields': res_cards.get('build_fields') or [],
+            'buttons': res_buttons.get('build_fields') or [],
             'sdk': host + '/monetaweb/resources/hfsdk.js',
             'finalize_url': f'/payment/nexi/build/{tx.reference}/finalize',
             'confirm_url': f'/payment/nexi/confirm?ref={tx.reference}',
