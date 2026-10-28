@@ -253,7 +253,6 @@
               <input type="checkbox" id="nexi-inline-privacy" class="form-check-input mt-1"/>
               <small>Ho letto l'informativa privacy Nexi (<a href="https://www.nexi.it/privacy/xpay.html" target="_blank">nexi.it/privacy/xpay</a>).</small>
             </label>
-            <button type="button" id="nexi-inline-pay" class="btn btn-primary d-none">Paga adesso</button>
             <p id="nexi-inline-error" class="alert alert-danger mt-2 d-none"></p>
           </div>
           <script>
@@ -354,7 +353,6 @@
                         var mb2 = document.getElementById('nexi-inline-methods');
                         if (mb2) mb2.style.display = 'none';
                         document.getElementById('nexi-inline-privacy-wrap').classList.remove('d-none');
-                        document.getElementById('nexi-inline-pay').classList.remove('d-none');
                       }
                       if (state === 'READY_FOR_PAYMENT') { finalize(box); }
                       if (state === 'PAYMENT_COMPLETE') { window.location.href = box.dataset.confirm; }
@@ -362,6 +360,7 @@
                     onBuildError: function () { fail('Errore Nexi. Riprova.'); },
                     onConfirmError: function () { fail('Dati non validi. Controlla e riprova.'); },
                   });
+                  window.__nexiBuild = build;
                   try { build.clickAction('PAY_WITH_CARD'); } catch (e) {}
                   setTimeout(function () {
                     if (!window.__nexiCardReady) {
@@ -370,12 +369,22 @@
                     }
                   }, 8000);
                 } catch (e) { fail('SDK Nexi non caricato. Riprova.'); return; }
-                document.getElementById('nexi-inline-pay').addEventListener('click', function () {
-                  if (!document.getElementById('nexi-inline-privacy').checked) {
-                    fail('Spunta la privacy per continuare.'); return;
-                  }
-                  if (build) { build.confirmData(function () {}); }
-                });
+                var oForm = document.getElementById('o_payment_form');
+                if (oForm &amp;&amp; !oForm.dataset.nexiHook) {
+                  oForm.dataset.nexiHook = '1';
+                  oForm.addEventListener('submit', function (ev) {
+                    var cardRadio = document.querySelector('input[name="o_payment_radio"][data-payment-method-code="card"]');
+                    var box = document.getElementById('nexi-inline');
+                    if (cardRadio &amp;&amp; cardRadio.checked &amp;&amp; box &amp;&amp; !box.classList.contains('d-none') &amp;&amp; box.dataset.finalize &amp;&amp; window.__nexiBuild) {
+                      ev.preventDefault();
+                      ev.stopPropagation();
+                      if (!document.getElementById('nexi-inline-privacy').checked) {
+                        fail('Spunta la privacy per continuare.'); return;
+                      }
+                      window.__nexiBuild.confirmData(function () {});
+                    }
+                  }, true);
+                }
               }
               function finalize(box) {
                 fetch(box.dataset.finalize, {
