@@ -238,8 +238,8 @@ class PaymentTransactionNexi(models.Model):
         }
         if contract and not self.nexi_contract_id:
             self.nexi_contract_id = contract
-        # Modalità Build v3: ordine embed invece di HPP.
-        if provider.nexi_mode == 'build':
+        # Modalità Build v3: solo la carta va embed; gli APM restano HPP.
+        if provider.nexi_mode == 'build' and (self.payment_method_code or '') == 'card':
             return self._nexi_render_build_values(res, provider, payload, want_save)
         url = provider._nexi_base_url()
         try:
@@ -284,12 +284,7 @@ class PaymentTransactionNexi(models.Model):
         from urllib.parse import urlparse
         parts = urlparse(base)
         build_payload['merchantUrl'] = f'{parts.scheme}://{parts.netloc}'
-        # In Build Nexi mostra da sola i bottoni: niente preselezione metodo.
-        if isinstance(build_payload.get('paymentSession'), dict):
-            build_payload['paymentSession'] = {
-                k: v for k, v in build_payload['paymentSession'].items()
-                if k != 'paymentService'
-            }
+        # La carta va con CARDS: Nexi ridà subito i 5 campi, niente bottoni.
         try:
             data = self._nexi_post_order(provider, build_url, build_payload, want_save)
         except ValidationError as e:

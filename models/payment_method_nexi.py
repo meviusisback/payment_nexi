@@ -28,13 +28,6 @@ class PaymentMethodNexi(models.Model):
         ).ids
         if not nexi_ids:
             return methods
-        providers = self.env['payment.provider'].browse(nexi_ids)
-        if any(p.nexi_mode == 'build' for p in providers):
-            # In Build i bottoni APM li dà Nexi dentro la riga Carta:
-            # le righe APM di Odoo si nascondono, resta solo Carta.
-            methods = methods.filtered(
-                lambda m: m.code == 'card' or not any(p.id in nexi_ids for p in m.provider_ids)
-            )
         return methods.filtered(
             lambda m: not (
                 m.nexi_disabled and any(p.id in nexi_ids for p in m.provider_ids)
