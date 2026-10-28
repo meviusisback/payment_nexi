@@ -57,6 +57,7 @@ class NexiController(http.Controller):
         tx = Tx.search([
             ('sale_order_ids', 'in', order.id),
             ('provider_id', '=', provider.id),
+            ('payment_method_id', '=', method.id),
             ('state', '=', 'draft'),
         ], order='id desc', limit=1)
         if not tx:
