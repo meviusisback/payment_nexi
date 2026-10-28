@@ -245,9 +245,9 @@
         </div>
         <t t-if="pm_sudo.code == 'card' and provider_sudo.code == 'nexi' and provider_sudo.nexi_mode == 'build'">
           <style>
-            li[name=o_payment_option]:has(.nexi-apm-inline) div[for="o_payment_radio"]{display:none}
-            li[name=o_payment_option]:has(.nexi-apm-inline) p[name="o_payment_secured_by"]{display:none}
-            li[name=o_payment_option]:has(.nexi-apm-inline) span.rounded.overflow-hidden{display:none}
+            li[name=o_payment_option]:has(.nexi-apm-inline) div[for="o_payment_radio"]{display:none !important}
+            li[name=o_payment_option]:has(.nexi-apm-inline) p[name="o_payment_secured_by"]{display:none !important}
+            li[name=o_payment_option]:has(.nexi-apm-inline) span.rounded.overflow-hidden{display:none !important}
           </style>
           <div id="nexi-inline" class="w-100 d-none">
             <div id="nexi-inline-fields" class="d-flex flex-column gap-2 my-2">
