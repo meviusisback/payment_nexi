@@ -57,6 +57,29 @@ Ordine test vero:
 - Niente review prima. Rimozione solo su abusi R1-R6.
 - Manca `icon.png` 1024x1024: aggiungi in `static/description/` prima di pubblicare.
 
+## Metodi di pagamento
+
+- Vuoto in `Metodo preselezionato` = tutti i metodi del terminale.
+- Scrivi un valore tabella Nexi per mostrare solo quello (es. `GOOGLEPAY`).
+- Passato come `paymentService` in `POST /orders/hpp`.
+- Solo maiuscole, cifre, underscore.
+
+## OneClick CIT
+
+- Attiva `OneClick CIT` sul provider.
+- Primo pagamento: crea contratto `CONTRACT_CREATION` tipo `CIT`.
+- Dopo: riusa `contractId` con `SUBSEQUENT_PAYMENT` via HPP.
+- Importo zero con OneClick = `VERIFY`, nessun addebito.
+- `AUTHORIZED` resta autorizzato, non diventa incassato.
+
+## Build v3 beta
+
+- Metti `Modalità` = Embedded Build v3.
+- Crea ordine `POST /orders/build` versione 3.
+- Mostra pagina interna `/payment/nexi/build/REF`.
+- Serve URL pubblico: localhost non va (limite Nexi).
+- Se errore, torna a Hosted Page.
+
 ## Sicurezza
 
 - Chiave solo per admin sistema, mai in log.
