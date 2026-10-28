@@ -405,19 +405,20 @@
                   document.querySelectorAll('.nexi-apm-inline').forEach(function (x) { x.classList.add('d-none'); });
                   var ap = li ? li.querySelector('.nexi-apm-inline') : null;
                   if (ap) { ap.classList.remove('d-none'); }
+                  prepare();
                 }
               });
               var pre = document.querySelector('input[name="o_payment_radio"]:checked');
               if (pre) {
                 var preLi = pre.closest('li[name=o_payment_option]');
                 var preAp = preLi ? preLi.querySelector('.nexi-apm-inline') : null;
-                if (preAp) { preAp.classList.remove('d-none'); prepare(); }
+                if (preAp) { preAp.classList.remove('d-none'); }
                 else if (pre.dataset &amp;&amp; pre.dataset.paymentMethodCode === 'card') {
                   var box3 = document.getElementById('nexi-inline');
                   if (box3) box3.classList.remove('d-none');
-                  prepare();
                 }
               }
+              prepare();
             })();
           </script>
         </t>
