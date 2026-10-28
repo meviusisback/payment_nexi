@@ -221,7 +221,7 @@
     <field name="inherit_id" ref="payment.method_form"/>
     <field name="arch" type="xml">
       <xpath expr="//div[p[@name='o_payment_secured_by']]" position="after">
-        <t t-set="nexi_cards" t-value="pm_sudo.code == 'card' and provider_sudo.code == 'nexi' and request.env['payment.transaction'].sudo().get_nexi_saved_cards(partner_id) or []"/>
+        <t t-set="nexi_cards" t-value="pm_sudo.code == 'card' and provider_sudo.code == 'nexi' and provider_sudo.nexi_mode != 'build' and request.env['payment.transaction'].sudo().get_nexi_saved_cards(partner_id) or []"/>
         <div t-if="nexi_cards" class="d-flex flex-column gap-1 mt-2">
           <div class="small text-600">Le tue carte</div>
           <t t-foreach="nexi_cards" t-as="nc">
@@ -286,11 +286,14 @@
                 var box = document.getElementById('nexi-inline');
                 if (!box || done) return;
                 done = true;
+                box.classList.remove('d-none');
                 var tok = document.querySelector('input[name="o_payment_tokenize_checkbox"]');
+                var tokBox = tok ? tok.closest('div[name="o_payment_tokenize_container"], div.o-checkbox') : null;
+                if (tokBox) tokBox.style.display = 'none';
                 fetch('/payment/nexi/build/prepare', {
                   method: 'POST',
                   headers: {'Content-Type': 'application/json'},
-                  body: JSON.stringify({tokenize: !!(tok &amp;&amp; tok.checked)}),
+                  body: JSON.stringify({tokenize: false}),
                 }).then(function (r) { return r.json(); }
                 ).then(function (res) {
                   var r = (res &amp;&amp; res.result) || res || {};
@@ -302,11 +305,11 @@
                   });
                   box.dataset.finalize = r.finalize_url;
                   box.dataset.confirm = r.confirm_url;
-                  loadSdk(r.sdk, initBuild);
+                  loadSdk(r.sdk, function () { initBuild(true); });
                   showSubmit(false);
                 }).catch(function () { done = false; fail('Form non caricato. Riprova.'); });
               }
-              function initBuild() {
+              function initBuild(autoCard) {
                 var build = null;
                 try {
                   build = new Build({
@@ -321,6 +324,8 @@
                         d.fieldSet.fields.forEach(function (f) {
                           if (f.src) fb.appendChild(iframeFor(f, '60px'));
                         });
+                        var mb2 = document.getElementById('nexi-inline-methods');
+                        if (mb2) mb2.style.display = 'none';
                         document.getElementById('nexi-inline-privacy-wrap').classList.remove('d-none');
                         document.getElementById('nexi-inline-pay').classList.remove('d-none');
                       }
@@ -330,6 +335,7 @@
                     onBuildError: function () { fail('Errore Nexi. Riprova.'); },
                     onConfirmError: function () { fail('Dati non validi. Controlla e riprova.'); },
                   });
+                  if (autoCard) { try { build.clickAction('PAY_WITH_CARD'); } catch (e) {} }
                 } catch (e) { fail('SDK Nexi non caricato. Riprova.'); return; }
                 document.getElementById('nexi-inline-pay').addEventListener('click', function () {
                   if (!document.getElementById('nexi-inline-privacy').checked) {
@@ -363,6 +369,12 @@
                   showSubmit(true);
                 }
               });
+              var pre = document.querySelector('input[name="o_payment_radio"][data-payment-method-code="card"]');
+              if (pre &amp;&amp; pre.checked) {
+                var box3 = document.getElementById('nexi-inline');
+                if (box3) box3.classList.remove('d-none');
+                prepare();
+              }
             })();
           </script>
         </t>
