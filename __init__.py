@@ -24,9 +24,11 @@ def post_init_hook(env):
             'code': 'nexi',
             'state': 'disabled',
             'is_published': False,
+            'allow_tokenization': True,
         })
         Provider.create(vals)
     else:
+        vals['allow_tokenization'] = True
         existing.write(vals)
     base = os.path.join(os.path.dirname(__file__), 'static', 'src', 'img')
     for code in codes:
