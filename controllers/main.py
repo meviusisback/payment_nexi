@@ -34,6 +34,64 @@ class NexiController(http.Controller):
             'confirm_url': f'/payment/nexi/confirm?ref={tx.reference}',
         })
 
+    @http.route('/payment/nexi/build/prepare', type='json', auth='public', website=True, methods=['POST'], csrf=False)
+    def nexi_build_prepare(self, tokenize=False, **kw):
+        """Crea transazione + ordine Build e ridà i campi da mettere nella riga Carta."""
+        order = request.website.sale_get_order()
+        if not order or not order.amount_total:
+            return {'error': 'Ordine non valido.'}
+        provider = request.env['payment.provider'].sudo().search(
+            [('code', '=', 'nexi'), ('state', '!=', 'disabled'), ('is_published', '=', True)],
+            limit=1,
+        )
+        if not provider or provider.nexi_mode != 'build':
+            return {'error': 'Build non attiva.'}
+        if (order.currency_id.name or '') != 'EUR':
+            return {'error': 'Nexi attiva solo in EUR.'}
+        method = request.env['payment.method'].sudo().search(
+            [('code', '=', 'card'), ('is_primary', '=', True)], limit=1,
+        )
+        if not method:
+            return {'error': 'Metodo carta mancante.'}
+        Tx = request.env['payment.transaction'].sudo()
+        tx = Tx.search([
+            ('sale_order_ids', 'in', order.id),
+            ('provider_id', '=', provider.id),
+            ('state', '=', 'draft'),
+        ], order='id desc', limit=1)
+        if not tx:
+            base = order.name or 'S'
+            n = Tx.search_count([('sale_order_ids', 'in', order.id)])
+            ref = base if not n else '%s-%s' % (base, n)
+            tx = Tx.create({
+                'provider_id': provider.id,
+                'payment_method_id': method.id,
+                'amount': order.amount_total,
+                'currency_id': order.currency_id.id,
+                'partner_id': order.partner_invoice_id.id,
+                'reference': ref,
+                'operation': 'online_redirect',
+                'sale_order_ids': [(6, 0, [order.id])],
+            })
+        try:
+            res = tx._get_specific_rendering_values({
+                'amount': tx.amount,
+                'currency_id': tx.currency_id.id,
+                'partner_id': tx.partner_id.id,
+                'reference': tx.reference,
+                'should_tokenize': bool(tokenize),
+            })
+        except Exception as e:
+            return {'error': str(e)[:200]}
+        host = 'https://xpaysandbox.nexigroup.com' if provider.nexi_env == 'test' else 'https://xpay.nexigroup.com'
+        return {
+            'tx': tx.reference,
+            'fields': res.get('build_fields') or [],
+            'sdk': host + '/monetaweb/resources/hfsdk.js',
+            'finalize_url': f'/payment/nexi/build/{tx.reference}/finalize',
+            'confirm_url': f'/payment/nexi/confirm?ref={tx.reference}',
+        }
+
     @http.route('/payment/nexi/build/<string:reference>/fields', type='http', auth='public', website=True, methods=['GET'])
     def nexi_build_fields(self, reference, **kw):
         """Ridate i bottoni metodi: li chiede a Nexi con la sessione salvata."""

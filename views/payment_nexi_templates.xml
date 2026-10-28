@@ -13,7 +13,12 @@
 
   <!-- Redirect Build = pagina embed: niente redirect su Nexi, resti sul sito. -->
   <template id="redirect_build" name="Nexi Build Redirect">
-    <t t-call="website.layout">
+    <html>
+      <head><title>Paga con Nexi</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1"/>
+        <link rel="stylesheet" href="/web/static/lib/bootstrap/css/bootstrap.min.css"/>
+      </head>
+      <body>
       <div class="container mt-4 mb-5">
         <h3>Paga con Nexi</h3>
         <p class="text-muted">Paghi senza uscire dal sito. I dati carta restano su Nexi.</p>
@@ -92,7 +97,8 @@
           });
         })();
       </script>
-    </t>
+      </body>
+    </html>
   </template>
 
   <!-- Pagina Build v3: SDK Nexi + iframe metodi/campi. Niente dati carta in Odoo. -->
@@ -237,6 +243,129 @@
             });
           </script>
         </div>
+        <t t-if="pm_sudo.code == 'card' and provider_sudo.code == 'nexi' and provider_sudo.nexi_mode == 'build'">
+          <div id="nexi-inline" class="w-100 d-none">
+            <div id="nexi-inline-methods" class="d-flex flex-column gap-2 my-2">
+              <p class="small text-muted">Carico il form carta…</p>
+            </div>
+            <div id="nexi-inline-fields" class="d-flex flex-column gap-2 my-2"></div>
+            <label class="d-flex align-items-start gap-2 my-2 d-none" id="nexi-inline-privacy-wrap">
+              <input type="checkbox" id="nexi-inline-privacy" class="form-check-input mt-1"/>
+              <small>Ho letto l'informativa privacy Nexi (<a href="https://www.nexi.it/privacy/xpay.html" target="_blank">nexi.it/privacy/xpay</a>).</small>
+            </label>
+            <button type="button" id="nexi-inline-pay" class="btn btn-primary d-none">Paga adesso</button>
+            <p id="nexi-inline-error" class="alert alert-danger mt-2 d-none"></p>
+          </div>
+          <script>
+            (function () {
+              var done = false;
+              function submitBtn() { return document.querySelector('button[name="o_payment_submit_button"]'); }
+              function showSubmit(show) {
+                var b = submitBtn();
+                if (b) b.classList.toggle('d-none', !show);
+              }
+              function fail(msg) {
+                var e = document.getElementById('nexi-inline-error');
+                if (e) { e.textContent = msg; e.classList.remove('d-none'); }
+              }
+              function iframeFor(f, height) {
+                var i = document.createElement('iframe');
+                i.src = f.src; i.scrolling = 'no';
+                i.style.border = '0'; i.style.width = '100%';
+                i.style.height = height || '60px';
+                return i;
+              }
+              function loadSdk(src, cb) {
+                if (window.Build) return cb();
+                var s = document.createElement('script');
+                s.src = src; s.onload = cb;
+                s.onerror = function () { fail('SDK Nexi non caricato. Riprova.'); };
+                document.head.appendChild(s);
+              }
+              function prepare() {
+                var box = document.getElementById('nexi-inline');
+                if (!box || done) return;
+                done = true;
+                var tok = document.querySelector('input[name="o_payment_tokenize_checkbox"]');
+                fetch('/payment/nexi/build/prepare', {
+                  method: 'POST',
+                  headers: {'Content-Type': 'application/json'},
+                  body: JSON.stringify({tokenize: !!(tok &amp;&amp; tok.checked)}),
+                }).then(function (r) { return r.json(); }
+                ).then(function (res) {
+                  var r = (res &amp;&amp; res.result) || res || {};
+                  if (r.error || !r.fields) { done = false; fail(r.error || 'Form non caricato. Riprova.'); return; }
+                  var mb = document.getElementById('nexi-inline-methods');
+                  mb.innerHTML = '';
+                  (r.fields || []).forEach(function (f) {
+                    if (f.src) mb.appendChild(iframeFor(f, '60px'));
+                  });
+                  box.dataset.finalize = r.finalize_url;
+                  box.dataset.confirm = r.confirm_url;
+                  loadSdk(r.sdk, initBuild);
+                  showSubmit(false);
+                }).catch(function () { done = false; fail('Form non caricato. Riprova.'); });
+              }
+              function initBuild() {
+                var build = null;
+                try {
+                  build = new Build({
+                    onBuildFlowStateChange: function (evtData, workflowState) {
+                      var d = evtData || {};
+                      var state = d.state || workflowState || '';
+                      var box = document.getElementById('nexi-inline');
+                      if (d.url) { window.location.href = d.url; return; }
+                      if (d.fieldSet &amp;&amp; d.fieldSet.fields) {
+                        var fb = document.getElementById('nexi-inline-fields');
+                        fb.innerHTML = '';
+                        d.fieldSet.fields.forEach(function (f) {
+                          if (f.src) fb.appendChild(iframeFor(f, '60px'));
+                        });
+                        document.getElementById('nexi-inline-privacy-wrap').classList.remove('d-none');
+                        document.getElementById('nexi-inline-pay').classList.remove('d-none');
+                      }
+                      if (state === 'READY_FOR_PAYMENT') { finalize(box); }
+                      if (state === 'PAYMENT_COMPLETE') { window.location.href = box.dataset.confirm; }
+                    },
+                    onBuildError: function () { fail('Errore Nexi. Riprova.'); },
+                    onConfirmError: function () { fail('Dati non validi. Controlla e riprova.'); },
+                  });
+                } catch (e) { fail('SDK Nexi non caricato. Riprova.'); return; }
+                document.getElementById('nexi-inline-pay').addEventListener('click', function () {
+                  if (!document.getElementById('nexi-inline-privacy').checked) {
+                    fail('Spunta la privacy per continuare.'); return;
+                  }
+                  if (build) { build.confirmData(function () {}); }
+                });
+              }
+              function finalize(box) {
+                fetch(box.dataset.finalize, {
+                  method: 'POST',
+                  headers: {'Content-Type': 'application/json'},
+                  body: '{}',
+                }).then(function (r) { return r.json(); }
+                ).then(function (res) {
+                  var r = (res &amp;&amp; res.result) || res || {};
+                  if (r.error) { fail('Nexi: ' + r.error); return; }
+                  if (r.url) { window.location.href = r.url; return; }
+                  window.location.href = box.dataset.confirm;
+                }).catch(function () { fail('Conferma non riuscita. Riprova.'); });
+              }
+              document.addEventListener('change', function (ev) {
+                var t = ev.target;
+                if (t &amp;&amp; t.name === 'o_payment_radio' &amp;&amp; t.dataset &amp;&amp; t.dataset.paymentMethodCode === 'card') {
+                  var box = document.getElementById('nexi-inline');
+                  if (box) box.classList.remove('d-none');
+                  prepare();
+                } else if (t &amp;&amp; t.name === 'o_payment_radio') {
+                  var box2 = document.getElementById('nexi-inline');
+                  if (box2) box2.classList.add('d-none');
+                  showSubmit(true);
+                }
+              });
+            })();
+          </script>
+        </t>
       </xpath>
     </field>
   </record>
