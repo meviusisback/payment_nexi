@@ -297,9 +297,14 @@ class PaymentTransactionNexi(models.Model):
             raise
         self.nexi_build_session = (data or {}).get('sessionId') or False
         self.nexi_build_token = (data or {}).get('securityToken') or False
+        host = 'https://xpaysandbox.nexigroup.com' if provider.nexi_env == 'test' else 'https://xpay.nexigroup.com'
         res.update(
             nexi_build=True,
             build_data=data,
+            build_fields=(data or {}).get('fields') or [],
+            nexi_sdk=host + '/monetaweb/resources/hfsdk.js',
+            build_finalize_url=f'/payment/nexi/build/{self.reference}/finalize',
+            confirm_url=f'/payment/nexi/confirm?ref={self.reference}',
             redirect_url=f'/payment/nexi/build/{self.reference}',
         )
         return res
