@@ -28,7 +28,7 @@
     </t>
   </template>
 
-  <!-- Cassa: preseleziona ultimo metodo + mostra carte salvate Nexi. -->
+  <!-- Cassa: preseleziona ultimo metodo + carte salvate DENTRO la riga Carta. -->
   <record id="view_payment_form_nexi" model="ir.ui.view">
     <field name="name">payment.form.nexi.saved</field>
     <field name="model" eval="False"/>
@@ -37,26 +37,30 @@
       <xpath expr="//t[@t-set='selected_method_id']" position="attributes">
         <attribute name="t-value">not selected_token_id and (request.env['payment.transaction'].sudo().get_last_used_method_id(partner_id, payment_methods_sudo.ids) or (len(payment_methods_sudo) == 1 and payment_methods_sudo[:1].id))</attribute>
       </xpath>
-      <xpath expr="//div[@id='o_payment_form_options']/div[1]" position="after">
-        <t t-set="nexi_cards" t-value="request.env['payment.transaction'].sudo().get_nexi_saved_cards(partner_id)"/>
-        <div t-if="nexi_cards" id="o_payment_nexi_saved" class="d-flex flex-column gap-3">
-          <div>
-            <h4 class="fs-6 small text-uppercase fw-bolder">Le tue carte salvate</h4>
-            <ul class="list-group">
-              <t t-foreach="nexi_cards" t-as="nc">
-                <li class="list-group-item d-flex justify-content-between align-items-center py-3">
-                  <span><i class="fa fa-credit-card"/> <t t-esc="nc['masked']"/></span>
-                  <button type="button" class="btn btn-link nexi-use-saved p-0">Usa questa</button>
-                </li>
-              </t>
-            </ul>
-            <p class="small text-600 mt-1">Scegli Carta qui sotto: su Nexi la ritrovi già pronta.</p>
-          </div>
+    </field>
+  </record>
+
+  <!-- Carte salvate dentro la riga Carta, sopra "Save my payment details". -->
+  <record id="view_payment_method_form_nexi" model="ir.ui.view">
+    <field name="name">payment.method_form.nexi.saved</field>
+    <field name="model" eval="False"/>
+    <field name="inherit_id" ref="payment.method_form"/>
+    <field name="arch" type="xml">
+      <xpath expr="//div[@name='o_payment_tokenize_container']" position="before">
+        <t t-set="nexi_cards" t-value="provider_sudo.code == 'nexi' and request.env['payment.transaction'].sudo().get_nexi_saved_cards(partner_id) or []"/>
+        <div t-if="nexi_cards" class="w-100 d-flex flex-column gap-1 my-2 ms-4">
+          <div class="small text-600">Le tue carte</div>
+          <t t-foreach="nexi_cards" t-as="nc">
+            <label class="d-flex align-items-center gap-2 fw-normal">
+              <input type="radio" name="o_nexi_saved" class="form-check-input mt-0 nexi-saved-radio"/>
+              <span><i class="fa fa-credit-card"/> <t t-esc="nc['masked']"/></span>
+            </label>
+          </t>
           <script>
-            document.addEventListener('click', function (ev) {
-              var b = ev.target.closest('.nexi-use-saved');
-              if (!b) return;
-              var r = document.querySelector('input[data-payment-method-code="card"]');
+            document.addEventListener('change', function (ev) {
+              if (!ev.target.classList || !ev.target.classList.contains('nexi-saved-radio')) return;
+              var row = ev.target.closest('li[name=o_payment_option]');
+              var r = row ? row.querySelector('input[data-payment-method-code="card"]') : null;
               if (r &amp;&amp; !r.checked) r.click();
             });
           </script>
