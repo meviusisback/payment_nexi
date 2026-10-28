@@ -6,5 +6,35 @@
     <field name="code">card</field>
     <field name="active">True</field>
   </record>
+  <record id="payment_method_nexi_googlepay" model="payment.method">
+    <field name="name">Google Pay via Nexi</field>
+    <field name="code">googlepay</field>
+    <field name="active">True</field>
+  </record>
+  <record id="payment_method_nexi_applepay" model="payment.method">
+    <field name="name">Apple Pay via Nexi</field>
+    <field name="code">applepay</field>
+    <field name="active">True</field>
+  </record>
+  <record id="payment_method_nexi_paypal" model="payment.method">
+    <field name="name">PayPal via Nexi</field>
+    <field name="code">paypal</field>
+    <field name="active">True</field>
+  </record>
+  <record id="payment_method_nexi_mybank" model="payment.method">
+    <field name="name">MyBank via Nexi</field>
+    <field name="code">mybank</field>
+    <field name="active">True</field>
+  </record>
+  <record id="payment_method_nexi_bancomatpay" model="payment.method">
+    <field name="name">Bancomat Pay via Nexi</field>
+    <field name="code">bancomatpay</field>
+    <field name="active">True</field>
+  </record>
+  <record id="payment_method_nexi_paypal_bnpl" model="payment.method">
+    <field name="name">PayPal 3 rate via Nexi</field>
+    <field name="code">paypal_bnpl</field>
+    <field name="active">True</field>
+  </record>
   </data>
 </odoo>

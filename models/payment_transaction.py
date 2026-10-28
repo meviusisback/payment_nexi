@@ -14,6 +14,17 @@ OK_RESULTS = {'EXECUTED'}
 AUTH_RESULTS = {'AUTHORIZED'}
 KO_RESULTS = {'CANCELED', 'THREEDS_FAILED', 'DENIED', 'ERROR'}
 
+# Metodo Odoo -> paymentService Nexi. Vuoto = tutti. Valori da tabella Nexi.
+METHOD_SERVICE = {
+    'card': 'CARDS',
+    'googlepay': 'GOOGLEPAY',
+    'applepay': 'APPLEPAY',
+    'bancomatpay': 'BANCOMATPAY',
+    'mybank': 'MYBANK',
+    'paypal': 'PAYPAL',
+    'paypal_bnpl': 'PAYPAL_BNPL',
+}
+
 REF_RE = re.compile(r'^[A-Za-z0-9_-]{4,64}$')
 
 
@@ -81,8 +92,10 @@ class PaymentTransactionNexi(models.Model):
             'cancelUrl': f'{base}/payment/nexi/confirm?ref={self.reference}&cancel=1',
             'captureType': 'EXPLICIT' if provider.nexi_capture == 'explicit' else 'IMPLICIT',
         }
-        # Preselezione metodo: solo se valorizzato, come da tabella Nexi.
+        # Preselezione metodo: campo provider vince, se vuoto usa metodo scelto.
         service = (provider.nexi_payment_service or '').strip().upper()
+        if not service:
+            service = METHOD_SERVICE.get(self.payment_method_code or '', False) or False
         if service:
             if not re.match(r'^[A-Z0-9_]{2,30}$', service):
                 raise ValidationError(_('Metodo Nexi non valido.'))

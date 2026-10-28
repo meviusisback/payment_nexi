@@ -19,7 +19,7 @@ sys.modules['odoo.exceptions'] = types.SimpleNamespace(ValidationError=Exception
 sys.modules['odoo.http'] = types.SimpleNamespace(request=None)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'models'))
 
-from payment_transaction import to_cents, is_paid, REF_RE, _parse_amount
+from payment_transaction import to_cents, is_paid, REF_RE, _parse_amount, METHOD_SERVICE
 
 
 class TestNexiPure(unittest.TestCase):
@@ -57,6 +57,13 @@ class TestNexiPure(unittest.TestCase):
         cid = 'N%06d%011d' % (3, 12)
         self.assertEqual(len(cid), 18)
         self.assertTrue(cid.startswith('N'))
+
+    def test_methods(self):
+        self.assertEqual(METHOD_SERVICE.get('card'), 'CARDS')
+        self.assertEqual(METHOD_SERVICE.get('googlepay'), 'GOOGLEPAY')
+        self.assertEqual(METHOD_SERVICE.get('mybank'), 'MYBANK')
+        self.assertEqual(METHOD_SERVICE.get('bancomatpay'), 'BANCOMATPAY')
+        self.assertEqual(METHOD_SERVICE.get('paypal_bnpl'), 'PAYPAL_BNPL')
 
     def test_test_keys_present(self):
         # Le chiavi finte devono essere quelle note, mai vuote.
