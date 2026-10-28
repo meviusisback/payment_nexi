@@ -16,15 +16,104 @@
     <p>Hai scelto pagamento nel sito (Build beta). <a t-att-href="redirect_url">Apri il form di pagamento</a></p>
   </template>
 
-  <!-- Pagina Build v3 beta: iframe Nexi. Serve URL pubblico, localhost non va. -->
+  <!-- Pagina Build v3: SDK Nexi + iframe metodi/campi. Niente dati carta in Odoo. -->
   <template id="build_page" name="Nexi Build Page">
     <t t-call="website.layout">
-      <div class="container mt-4">
-        <h3>Paga con Nexi (Build beta)</h3>
-        <p>Build v3 incassa nel sito con iframe Nexi. Se vedi errore, torna a Hosted Page.</p>
-        <div id="nexi-build" t-att-data-tx="tx_reference">Carico il form Nexi…</div>
-        <p><a href="/shop/payment">Torna alla cassa</a></p>
+      <div class="container mt-4 mb-5">
+        <h3>Paga con Nexi</h3>
+        <p class="text-muted">Paghi senza uscire dal sito. I dati carta restano su Nexi.</p>
+        <div id="nexi-build-methods" class="d-flex flex-column gap-2 my-3">
+          <p class="text-muted">Carico i metodi…</p>
+        </div>
+        <div id="nexi-build-fields" class="d-flex flex-column gap-2 my-3"></div>
+        <label class="d-flex align-items-start gap-2 my-3 d-none" id="nexi-build-privacy-wrap">
+          <input type="checkbox" id="nexi-build-privacy" class="form-check-input mt-1"/>
+          <small>Ho letto l'informativa privacy Nexi (<a href="https://www.nexi.it/privacy/xpay.html" target="_blank">nexi.it/privacy/xpay</a>).</small>
+        </label>
+        <button type="button" id="nexi-build-pay" class="btn btn-primary d-none">Paga adesso</button>
+        <p id="nexi-build-error" class="alert alert-danger mt-3 d-none"></p>
+        <p class="mt-3"><a href="/shop/payment">Torna alla cassa</a></p>
       </div>
+      <script type="text/javascript" t-att-src="nexi_sdk"></script>
+      <script type="text/javascript">
+        (function () {
+          var FIELDS_URL = "<t t-esc="build_state_url"/>";
+          var FINALIZE_URL = "<t t-esc="build_finalize_url"/>";
+          var CONFIRM_URL = "<t t-esc="confirm_url"/>";
+          function fail(msg) {
+            var e = document.getElementById('nexi-build-error');
+            e.textContent = msg; e.classList.remove('d-none');
+          }
+          function iframeFor(f, height) {
+            var i = document.createElement('iframe');
+            i.src = f.src; i.scrolling = 'no';
+            i.style.border = '0'; i.style.width = '100%';
+            i.style.height = height || '60px';
+            i.setAttribute('data-build-id', f.id || '');
+            return i;
+          }
+          function showMethods(fields) {
+            var box = document.getElementById('nexi-build-methods');
+            box.innerHTML = '';
+            (fields || []).forEach(function (f) {
+              if (!f.src) return;
+              var wrap = document.createElement('div');
+              wrap.appendChild(iframeFor(f, f.class === 'APM' ? '60px' : '70px'));
+              box.appendChild(wrap);
+            });
+            if (!box.children.length) fail('Nessun metodo disponibile su questo terminale.');
+          }
+          fetch(FIELDS_URL, {headers: {'Accept': 'application/json'}}).then(function (r) {
+            return r.json();
+          }).then(function (data) {
+            var fs = data.fieldSet || data;
+            showMethods(fs.fields);
+          }).catch(function () { fail('Metodi non caricati. Riprova.'); });
+          var build = null;
+          try {
+            build = new Build({
+              onBuildFlowStateChange: function (evtData, workflowState) {
+                var d = evtData || {};
+                var state = d.state || workflowState || '';
+                if (d.url) { window.location.href = d.url; return; }
+                if (d.fieldSet &amp;&amp; d.fieldSet.fields) {
+                  var box = document.getElementById('nexi-build-fields');
+                  box.innerHTML = '';
+                  d.fieldSet.fields.forEach(function (f) {
+                    if (!f.src) return;
+                    box.appendChild(iframeFor(f, '60px'));
+                  });
+                  document.getElementById('nexi-build-privacy-wrap').classList.remove('d-none');
+                  document.getElementById('nexi-build-pay').classList.remove('d-none');
+                }
+                if (state === 'READY_FOR_PAYMENT') { finalize(); }
+                if (state === 'PAYMENT_COMPLETE') { window.location.href = CONFIRM_URL; }
+              },
+              onBuildError: function (d) { fail('Errore Nexi. Riprova.'); },
+              onConfirmError: function (d) { fail('Dati non validi. Controlla e riprova.'); },
+            });
+          } catch (e) { fail('SDK Nexi non caricato. Riprova.'); }
+          function finalize() {
+            fetch(FINALIZE_URL, {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: '{}',
+            }).then(function (r) { return r.json(); }
+            ).then(function (res) {
+              var r = (res &amp;&amp; res.result) || res || {};
+              if (r.error) { fail('Nexi: ' + r.error); return; }
+              if (r.url) { window.location.href = r.url; return; }
+              window.location.href = CONFIRM_URL;
+            }).catch(function () { fail('Conferma non riuscita. Riprova.'); });
+          }
+          document.getElementById('nexi-build-pay').addEventListener('click', function () {
+            if (!document.getElementById('nexi-build-privacy').checked) {
+              fail('Spunta la privacy per continuare.'); return;
+            }
+            if (build) { build.confirmData(function () {}); }
+          });
+        })();
+      </script>
     </t>
   </template>
 

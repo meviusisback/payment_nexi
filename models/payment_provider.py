@@ -163,7 +163,7 @@ class PaymentProviderNexi(models.Model):
             return self.env.ref('payment_nexi.redirect_form')
         return super()._get_redirect_form_view(is_validation=is_validation)
 
-    def _nexi_make_request(self, method, url, payload=None):
+    def _nexi_make_request(self, method, url, payload=None, params=None):
         """Chiama Nexi in REST JSON. Semplice, con timeout."""
         self.ensure_one()
         import uuid
@@ -173,7 +173,7 @@ class PaymentProviderNexi(models.Model):
             'Correlation-Id': str(uuid.uuid4()),
         }
         try:
-            resp = requests.request(method, url, json=payload, headers=headers, timeout=(5, 15))
+            resp = requests.request(method, url, json=payload, params=params, headers=headers, timeout=(5, 15))
             try:
                 resp.raise_for_status()
             except requests.exceptions.HTTPError:

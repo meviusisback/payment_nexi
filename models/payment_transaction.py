@@ -66,6 +66,8 @@ class PaymentTransactionNexi(models.Model):
         string='Carta salvata', readonly=True,
         help='Numero mascherato da Nexi (es. ****7289). Mai la carta vera.',
     )
+    nexi_build_session = fields.Char(string='Sessione Build', readonly=True)
+    nexi_build_token = fields.Char(string='Token Build', readonly=True)
 
     def _nexi_family_ids(self, partner_id):
         """Partner + contatti collegati: il contratto vale per tutta la famiglia."""
@@ -242,12 +244,22 @@ class PaymentTransactionNexi(models.Model):
         build_url = provider._nexi_build_url()
         build_payload = dict(payload)
         build_payload['version'] = '3'
-        build_payload['merchantUrl'] = base
+        from urllib.parse import urlparse
+        parts = urlparse(base)
+        build_payload['merchantUrl'] = f'{parts.scheme}://{parts.netloc}'
+        # In Build Nexi mostra da sola i bottoni: niente preselezione metodo.
+        if isinstance(build_payload.get('paymentSession'), dict):
+            build_payload['paymentSession'] = {
+                k: v for k, v in build_payload['paymentSession'].items()
+                if k != 'paymentService'
+            }
         try:
             data = provider._nexi_make_request('POST', build_url, payload=build_payload)
         except ValidationError as e:
             self._set_error(str(e))
             raise
+        self.nexi_build_session = (data or {}).get('sessionId') or False
+        self.nexi_build_token = (data or {}).get('securityToken') or False
         res.update(
             nexi_build=True,
             build_data=data,

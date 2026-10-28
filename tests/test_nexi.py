@@ -19,7 +19,7 @@ sys.modules['odoo.exceptions'] = types.SimpleNamespace(ValidationError=Exception
 sys.modules['odoo.http'] = types.SimpleNamespace(request=None)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'models'))
 
-from payment_transaction import to_cents, is_paid, REF_RE, _parse_amount, METHOD_SERVICE
+from payment_transaction import to_cents, is_paid, REF_RE, _parse_amount, METHOD_SERVICE, _nexi_short
 
 
 class TestNexiPure(unittest.TestCase):
@@ -52,6 +52,11 @@ class TestNexiPure(unittest.TestCase):
         self.assertTrue(re.match(r'^[A-Z0-9_]{2,30}$', 'GOOGLEPAY'))
         self.assertFalse(re.match(r'^[A-Z0-9_]{2,30}$', 'a'))
         self.assertFalse(re.match(r'^[A-Z0-9_]{2,30}$', '../../etc'))
+
+    def test_short(self):
+        self.assertEqual(_nexi_short('499934******7289'), '**** 7289')
+        self.assertEqual(_nexi_short('****7289'), '**** 7289')
+        self.assertEqual(_nexi_short(False), 'Carta salvata')
 
     def test_contract(self):
         cid = 'N%06d%011d' % (3, 12)
