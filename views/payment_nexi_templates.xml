@@ -334,10 +334,15 @@
                   hb.appendChild(iframeFor(card, '60px'));
                 }
               }
-              function initBuild() {
-                var build = null;
+                function tryCardClick() {
+                  if (window.__nexiCardReady) return;
+                  try { if (window.__nexiBuild) window.__nexiBuild.clickAction('PAY_WITH_CARD'); } catch (e) {}
+                }
+                function initBuild() {
+                var buildObj = null;
                 try {
-                  build = new Build({
+                  buildObj = new Build({
+                    onAllFieldsLoaded: function () { tryCardClick(); },
                     onBuildFlowStateChange: function (evtData, workflowState) {
                       var d = evtData || {};
                       var state = d.state || workflowState || '';
@@ -360,12 +365,18 @@
                     onBuildError: function () { fail('Errore Nexi. Riprova.'); },
                     onConfirmError: function () { fail('Dati non validi. Controlla e riprova.'); },
                   });
-                  window.__nexiBuild = build;
-                  try { build.clickAction('PAY_WITH_CARD'); } catch (e) {}
+                  window.__nexiBuild = buildObj;
+                  var hbFrame = document.querySelector('#nexi-inline-buttons iframe');
+                  if (hbFrame) {
+                    if (hbFrame.addEventListener) hbFrame.addEventListener('load', tryCardClick);
+                    else hbFrame.onload = tryCardClick;
+                  }
+                  setTimeout(tryCardClick, 1500);
+                  setTimeout(tryCardClick, 3000);
                   setTimeout(function () {
                     if (!window.__nexiCardReady) {
-                      var hb = document.getElementById('nexi-inline-buttons');
-                      if (hb) hb.style.display = '';
+                      fail('Campi carta non caricati. Premi Pay now per continuare.');
+                      showSubmit(true);
                     }
                   }, 8000);
                 } catch (e) { fail('SDK Nexi non caricato. Riprova.'); return; }
