@@ -267,7 +267,16 @@
                   fetch('/payment/nexi/build/jserror', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({msg: String((e &amp;&amp; e.message) || e).slice(0, 300)}),
+                    body: JSON.stringify({msg: 'ERR:' + String((e &amp;&amp; e.message) || e).slice(0, 300)}),
+                  }).catch(function () {});
+                } catch (ee) {}
+              });
+              window.addEventListener('unhandledrejection', function (e) {
+                try {
+                  fetch('/payment/nexi/build/jserror', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({msg: 'REJ:' + String((e &amp;&amp; e.reason) || e).slice(0, 300)}),
                   }).catch(function () {});
                 } catch (ee) {}
               });
@@ -419,6 +428,13 @@
                 }
               }
               prepare();
+              setTimeout(function () {
+                var fb = document.getElementById('nexi-inline-fields');
+                if (fb &amp;&amp; !fb.querySelector('iframe')) {
+                  fail('Campi non arrivati. Premi Pay now per continuare.');
+                  showSubmit(true);
+                }
+              }, 12000);
             })();
           </script>
         </t>
