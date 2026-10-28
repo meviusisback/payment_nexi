@@ -1,0 +1,178 @@
+# -*- coding: utf-8 -*-
+"""Transazione Nexi XPay Web. Un solo flusso: crea ordine -> redirect -> verifica."""
+import logging
+import re
+from decimal import Decimal, InvalidOperation
+
+from odoo import _, fields, models
+from odoo.exceptions import ValidationError
+
+_logger = logging.getLogger(__name__)
+
+# Esiti Nexi. EXECUTED = pagato (automatico). AUTHORIZED = solo bloccato.
+OK_RESULTS = {'EXECUTED'}
+AUTH_RESULTS = {'AUTHORIZED'}
+KO_RESULTS = {'CANCELED', 'THREEDS_FAILED', 'DENIED', 'ERROR'}
+
+REF_RE = re.compile(r'^[A-Za-z0-9_-]{4,64}$')
+
+
+def to_cents(amount):
+    """Euro -> centesimi interi. Esempio: 12.34 -> 1234."""
+    try:
+        return int((Decimal(str(amount)) * 100).to_integral_value())
+    except (InvalidOperation, ValueError, TypeError):
+        return 0
+
+
+def is_paid(operation_result):
+    return operation_result in OK_RESULTS
+
+
+def _parse_amount(value):
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return Decimal('0')
+
+
+class PaymentTransactionNexi(models.Model):
+    _inherit = 'payment.transaction'
+
+    nexi_order_id = fields.Char(string='ID ordine Nexi', readonly=True)
+
+    def _get_specific_create_values(self, provider_code, values):
+        vals = super()._get_specific_create_values(provider_code, values)
+        if provider_code == 'nexi':
+            vals['nexi_order_id'] = values.get('reference')
+        return vals
+
+    def _get_specific_rendering_values(self, processing_values):
+        """Valori per il form redirect. Qui creiamo l'ordine su Nexi."""
+        res = super()._get_specific_rendering_values(processing_values)
+        if self.provider_code != 'nexi':
+            return res
+        self.ensure_one()
+        if self.currency_id.name != 'EUR':
+            raise ValidationError(_('Nexi attiva solo in EUR.'))
+        provider = self.provider_id
+        if not provider.nexi_api_key:
+            raise ValidationError(_('Manca la X-Api-Key Nexi nel provider.'))
+        base = self.get_base_url()
+        payload = {
+            'order': {
+                'orderId': self.reference,
+                'amount': str(to_cents(self.amount)),
+                'currency': self.currency_id.name or 'EUR',
+                'description': (self.reference or '')[:100],
+            },
+            'paymentSession': {
+                'actionType': 'PAY',
+                'amount': str(to_cents(self.amount)),
+                'language': 'ITA',
+                'resultUrl': f'{base}/payment/nexi/confirm?ref={self.reference}',
+                'cancelUrl': f'{base}/payment/nexi/confirm?ref={self.reference}&cancel=1',
+            },
+        }
+        url = provider._nexi_base_url()
+        try:
+            data = provider._nexi_make_request('POST', url, payload=payload)
+        except ValidationError as e:
+            self._set_error(str(e))
+            raise
+
+        hosted = (data or {}).get('hostedPage') or (data or {}).get('hostedpage')
+        token = (data or {}).get('securityToken') or (data or {}).get('securitytoken')
+        if not hosted:
+            self._set_error('Nexi non ha dato la pagina di pagamento.')
+            raise ValidationError(_('Nexi errore. Riprova.'))
+        # Nexi dà hostedPage + securityToken separati: vanno uniti.
+        if token and 'securityToken' not in hosted:
+            sep = '&' if '?' in hosted else '?'
+            hosted = f'{hosted}{sep}securityToken={token}'
+        _logger.info('Nexi ordine %s creato.', self.reference)
+        # Dividi base e parametri: il form GET li rimette da solo.
+        from urllib.parse import urlparse, parse_qsl
+        parts = urlparse(hosted)
+        if parts.scheme.lower() != 'https':
+            raise ValidationError(_('Nexi errore. Riprova.'))
+        from .payment_provider import NEXI_HOSTS
+        host = (parts.netloc or '').lower()
+        if not any(host == h or host.endswith('.' + h) for h in NEXI_HOSTS):
+            raise ValidationError(_('Nexi errore. Riprova.'))
+        base = f'{parts.scheme}://{parts.netloc}{parts.path}'
+        params = dict(parse_qsl(parts.query))
+        res.update(redirect_url=hosted, api_url=base, url_params=params)
+        return res
+
+    def _get_tx_from_notification_data(self, provider_code, notification_data):
+        tx = super()._get_tx_from_notification_data(provider_code, notification_data)
+        if provider_code != 'nexi' or tx:
+            return tx
+        ref = (notification_data or {}).get('ref') or (notification_data or {}).get('orderId')
+        if not ref or not REF_RE.match(str(ref)):
+            raise ValidationError(_('Ritorno Nexi non valido.'))
+        tx = self.search([('reference', '=', ref), ('provider_code', '=', 'nexi')])
+        if not tx:
+            raise ValidationError(_('Ritorno Nexi non valido.'))
+        return tx
+
+    def _process_notification_data(self, notification_data):
+        super()._process_notification_data(notification_data)
+        if self.provider_code != 'nexi':
+            return
+        # Non fidarti di cancel in URL: verifica sempre su Nexi.
+        provider = self.provider_id
+        create_url = provider._nexi_base_url()
+        if '/orders/hpp' in create_url:
+            verify_url = create_url.replace('/orders/hpp', f'/orders/{self.reference}')
+        else:
+            from urllib.parse import quote
+            verify_url = create_url.rstrip('/') + f'/orders/{quote(self.reference, safe="")}'
+        try:
+            data = provider._nexi_make_request('GET', verify_url)
+        except ValidationError as e:
+            self._set_error(str(e))
+            return
+        result = ''
+        for op in (data or {}).get('operations', []):
+            if op.get('operationType') == 'AUTHORIZATION':
+                result = op.get('operationResult') or ''
+                break
+        if is_paid(result):
+            # Controlla importo e valuta prima di chiudere.
+            expected = _parse_amount(self.amount)
+            got = Decimal('0')
+            cur_ok = True
+            for op in (data or {}).get('operations', []):
+                if op.get('operationType') == 'AUTHORIZATION':
+                    got = _parse_amount(op.get('operationAmount', '0'))
+                    if op.get('operationCurrency') and op.get('operationCurrency') != self.currency_id.name:
+                        cur_ok = False
+                    break
+            status = (data or {}).get('orderStatus', {}) or {}
+            if not cur_ok or got < expected:
+                self._set_error('Nexi importo non valido.')
+                return
+            cap = _parse_amount(status.get('capturedAmount', '0'))
+            if cap < expected:
+                self._set_error('Nexi incasso non completo.')
+                return
+            self._set_done(state_message=f'Nexi OK: {result}')
+        elif result in AUTH_RESULTS:
+            self._set_authorized(state_message=f'Nexi autorizzato: {result}')
+        elif result in KO_RESULTS:
+            self._set_canceled(state_message=f'Nexi KO: {result}')
+        else:
+            self._set_pending(state_message=f'Nexi in attesa: {result or "sconosciuto"}')
+
+    def _send_refund_request(self, amount_to_refund=None, create_refund_transaction=True):
+        self.ensure_one()
+        if self.provider_code != 'nexi':
+            return super()._send_refund_request(
+                amount_to_refund=amount_to_refund,
+                create_refund_transaction=create_refund_transaction,
+            )
+        raise ValidationError(_(
+            'Rimborso Nexi non attivo: manca URL back office da developer.nexi.it.'
+        ))

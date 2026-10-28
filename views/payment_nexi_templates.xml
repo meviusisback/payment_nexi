@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+  <!-- Form di redirect: Odoo lo invia da solo verso Nexi. -->
+  <template id="redirect_form" name="Nexi Redirect">
+    <form t-att-action="api_url" method="GET">
+      <t t-foreach="url_params.items()" t-as="p">
+        <input type="hidden" t-att-name="p[0]" t-att-value="p[1]"/>
+      </t>
+      <p>Stai andando su Nexi… <button type="submit" class="btn btn-primary">Paga su Nexi</button></p>
+      <p><a t-att-href="redirect_url">clicca qui se non parte</a></p>
+    </form>
+  </template>
+
+  <!-- Campi credenziali nel form provider. -->
+  <record id="view_provider_nexi" model="ir.ui.view">
+    <field name="name">payment.provider.nexi.form</field>
+    <field name="model">payment.provider</field>
+    <field name="inherit_id" ref="payment.payment_provider_form"/>
+    <field name="arch" type="xml">
+      <xpath expr="//group[@name='provider_credentials']" position="inside">
+        <field name="nexi_api_key" password="True"/>
+        <field name="nexi_env"/>
+        <field name="nexi_capture"/>
+        <field name="nexi_test_url" placeholder="URL test da developer.nexi.it/it/api/..."/>
+        <field name="nexi_prod_url" placeholder="URL produzione da developer.nexi.it/it/api/..."/>
+      </xpath>
+    </field>
+  </record>
+</odoo>
