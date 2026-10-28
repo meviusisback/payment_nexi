@@ -287,6 +287,8 @@
                 if (!box || done) return;
                 done = true;
                 box.classList.remove('d-none');
+                var cardReady = false;
+                window.__nexiCardReady = function () { cardReady = true; };
                 var tok = document.querySelector('input[name="o_payment_tokenize_checkbox"]');
                 var tokBox = tok ? tok.closest('div[name="o_payment_tokenize_container"], div.o-checkbox') : null;
                 if (tokBox) tokBox.style.display = 'none';
@@ -303,10 +305,16 @@
                   (r.fields || []).forEach(function (f) {
                     if (f.src) mb.appendChild(iframeFor(f, '60px'));
                   });
+                  mb.style.display = 'none';
+                  setTimeout(function () {
+                    if (!cardReady) {
+                      mb.style.display = '';
+                      showSubmit(true);
+                    }
+                  }, 8000);
                   box.dataset.finalize = r.finalize_url;
                   box.dataset.confirm = r.confirm_url;
                   loadSdk(r.sdk, function () { initBuild(true); });
-                  showSubmit(false);
                 }).catch(function () { done = false; fail('Form non caricato. Riprova.'); });
               }
               function initBuild(autoCard) {
@@ -319,6 +327,7 @@
                       var box = document.getElementById('nexi-inline');
                       if (d.url) { window.location.href = d.url; return; }
                       if (d.fieldSet &amp;&amp; d.fieldSet.fields) {
+                        if (window.__nexiCardReady) window.__nexiCardReady();
                         var fb = document.getElementById('nexi-inline-fields');
                         fb.innerHTML = '';
                         d.fieldSet.fields.forEach(function (f) {
