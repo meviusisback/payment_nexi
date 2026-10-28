@@ -35,8 +35,8 @@ class NexiController(http.Controller):
         })
 
     @http.route('/payment/nexi/build/prepare', type='json', auth='public', website=True, methods=['POST'], csrf=False)
-    def nexi_build_prepare(self, tokenize=False, **kw):
-        """Crea transazione + ordine Build e ridà i campi da mettere nella riga Carta."""
+    def nexi_build_prepare(self, method_code='card', tokenize=False, **kw):
+        """Crea transazione + ordine Build e ridà campi o URL APM."""
         order = request.website.sale_get_order()
         if not order or not order.amount_total:
             return {'error': 'Ordine non valido.'}
@@ -49,7 +49,7 @@ class NexiController(http.Controller):
         if (order.currency_id.name or '') != 'EUR':
             return {'error': 'Nexi attiva solo in EUR.'}
         method = request.env['payment.method'].sudo().search(
-            [('code', '=', 'card'), ('is_primary', '=', True)], limit=1,
+            [('code', '=', method_code), ('is_primary', '=', True)], limit=1,
         )
         if not method:
             return {'error': 'Metodo carta mancante.'}
@@ -80,6 +80,7 @@ class NexiController(http.Controller):
                 'partner_id': tx.partner_id.id,
                 'reference': tx.reference,
                 'should_tokenize': bool(tokenize),
+                'force_build': True,
             })
         except Exception as e:
             return {'error': str(e)[:200]}
@@ -87,6 +88,7 @@ class NexiController(http.Controller):
         return {
             'tx': tx.reference,
             'fields': res.get('build_fields') or [],
+            'url': res.get('build_url') or False,
             'sdk': host + '/monetaweb/resources/hfsdk.js',
             'finalize_url': f'/payment/nexi/build/{tx.reference}/finalize',
             'confirm_url': f'/payment/nexi/confirm?ref={tx.reference}',

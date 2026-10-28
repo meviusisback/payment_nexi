@@ -238,8 +238,10 @@ class PaymentTransactionNexi(models.Model):
         }
         if contract and not self.nexi_contract_id:
             self.nexi_contract_id = contract
-        # Modalità Build v3: solo la carta va embed; gli APM restano HPP.
-        if provider.nexi_mode == 'build' and (self.payment_method_code or '') == 'card':
+        # Modalità Build v3: carta embed e APM via Build; resto HPP.
+        if provider.nexi_mode == 'build' and (
+            (self.payment_method_code or '') == 'card' or processing_values.get('force_build')
+        ):
             return self._nexi_render_build_values(res, provider, payload, want_save)
         url = provider._nexi_base_url()
         try:
@@ -297,6 +299,8 @@ class PaymentTransactionNexi(models.Model):
             nexi_build=True,
             build_data=data,
             build_fields=(data or {}).get('fields') or [],
+            build_url=(data or {}).get('url') or False,
+            build_state=(data or {}).get('state') or False,
             nexi_sdk=host + '/monetaweb/resources/hfsdk.js',
             build_finalize_url=f'/payment/nexi/build/{self.reference}/finalize',
             confirm_url=f'/payment/nexi/confirm?ref={self.reference}',
