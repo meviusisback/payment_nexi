@@ -55,6 +55,10 @@ class PaymentTransactionNexi(models.Model):
         string='Contratto OneClick', readonly=True,
         help='contractId CIT creato al primo pagamento, riusato dopo.',
     )
+    nexi_masked_pan = fields.Char(
+        string='Carta salvata', readonly=True,
+        help='Numero mascherato da Nexi (es. ****7289). Mai la carta vera.',
+    )
 
     def _nexi_contract_for_partner(self, partner_id):
         """Ultimo contratto CIT pagato di questo partner, se esiste."""
@@ -226,11 +230,18 @@ class PaymentTransactionNexi(models.Model):
             expected = _parse_amount(self.amount)
             got = Decimal('0')
             cur_ok = True
+            masked = False
             for op in (data or {}).get('operations', []):
                 if op.get('operationType') == 'AUTHORIZATION':
                     got = _parse_amount(op.get('operationAmount', '0'))
                     if op.get('operationCurrency') and op.get('operationCurrency') != self.currency_id.name:
                         cur_ok = False
+                    masked = (
+                        op.get('paymentInstrumentInfo')
+                        or op.get('maskedPan')
+                        or op.get('maskedPanAlias')
+                        or False
+                    )
                     break
             status = (data or {}).get('orderStatus', {}) or {}
             if not cur_ok or got < expected:
@@ -240,8 +251,20 @@ class PaymentTransactionNexi(models.Model):
             if cap < expected:
                 self._set_error('Nexi incasso non completo.')
                 return
+            if masked:
+                self.nexi_masked_pan = str(masked)[:32]
             self._set_done(state_message=f'Nexi OK: {result}')
         elif result in AUTH_RESULTS:
+            for op in (data or {}).get('operations', []):
+                if op.get('operationType') == 'AUTHORIZATION':
+                    masked_auth = (
+                        op.get('paymentInstrumentInfo')
+                        or op.get('maskedPan')
+                        or False
+                    )
+                    if masked_auth:
+                        self.nexi_masked_pan = str(masked_auth)[:32]
+                    break
             self._set_authorized(state_message=f'Nexi autorizzato: {result}')
         elif result in KO_RESULTS:
             self._set_canceled(state_message=f'Nexi KO: {result}')
