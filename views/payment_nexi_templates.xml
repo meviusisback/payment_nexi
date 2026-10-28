@@ -293,8 +293,12 @@
               li[name=o_payment_option]:has(.nexi-apm-inline) div[for="o_payment_radio"]{display:none !important}
               li[name=o_payment_option]:has(.nexi-apm-inline) p[name="o_payment_secured_by"]{display:none !important}
               li[name=o_payment_option]:has(.nexi-apm-inline) span.rounded.overflow-hidden{display:none !important}
+              li[name=o_payment_option]:has(#nexi-inline) input[type="radio"]{display:none !important}
+              li[name=o_payment_option]:has(#nexi-inline){cursor:pointer}
               li[name=o_payment_option] span.rounded.overflow-hidden{width:auto !important;height:26px !important;min-width:26px;background:transparent !important;box-shadow:none !important}
               li[name=o_payment_option] span.rounded.overflow-hidden img{height:26px !important;width:auto !important;max-width:54px;object-fit:contain;min-height:0 !important}
+              .nexi-apm-inline{padding:4px 0}
+              .nexi-apm-frame iframe{display:block !important;width:260px !important;max-width:100% !important;height:52px !important;border:0 !important;border-radius:8px;overflow:hidden}
             </style>
             <div id="nexi-inline" class="w-100 d-none">
               <div id="nexi-inline-fields" class="d-flex flex-column gap-2 my-2">
@@ -456,13 +460,27 @@
               }
               document.addEventListener('click', function (ev) {
                 var t = ev.target;
-                if (!t || t.name !== 'o_payment_radio' || !t.dataset) return;
-                if (t.dataset.paymentMethodCode !== 'card') return;
-                var box = document.getElementById('nexi-inline');
-                if (box) {
-                  box.classList.remove('d-none');
-                  if (!box.querySelector('iframe')) { done = false; }
+                if (t &amp;&amp; t.name === 'o_payment_radio' &amp;&amp; t.dataset &amp;&amp; t.dataset.paymentMethodCode === 'card') {
+                  var box = document.getElementById('nexi-inline');
+                  if (box) {
+                    box.classList.remove('d-none');
+                    if (!box.querySelector('iframe')) { done = false; }
+                  }
+                  prepare(true);
+                  return;
                 }
+                // Radio nascosto: clicco la riga Carta e apro i campi.
+                var row = t &amp;&amp; t.closest ? t.closest('li[name=o_payment_option]') : null;
+                if (!row || !row.querySelector('#nexi-inline')) return;
+                if (t.closest('#nexi-inline')) return;
+                var b = document.getElementById('nexi-inline');
+                var r = row.querySelector('input[data-payment-method-code="card"]');
+                if (r) { try { r.checked = true; } catch (e) {} }
+                if (b) {
+                  b.classList.remove('d-none');
+                  if (!b.querySelector('iframe')) { done = false; }
+                }
+                document.querySelectorAll('.nexi-apm-inline').forEach(function (x) { x.classList.add('d-none'); });
                 prepare(true);
               });
               document.addEventListener('change', function (ev) {
