@@ -22,6 +22,7 @@ METHOD_SERVICE = {
     'bancomatpay': 'BANCOMATPAY',
     'mybank': 'MYBANK',
     'paypal': 'PAYPAL',
+    'paypal_bnpl': 'PAYPAL_BNPL',
 }
 
 def _nexi_short(masked):
@@ -193,9 +194,13 @@ class PaymentTransactionNexi(models.Model):
             'captureType': 'EXPLICIT' if provider.nexi_capture == 'explicit' else 'IMPLICIT',
         }
         # Preselezione metodo: campo provider vince, se vuoto usa metodo scelto.
-        service = (provider.nexi_payment_service or '').strip().upper()
-        if not service:
-            service = METHOD_SERVICE.get(self.payment_method_code or '', False) or False
+        # no_service (prepare condiviso): niente filtro, Nexi ridà tutti i bottoni.
+        if processing_values.get('no_service'):
+            service = False
+        else:
+            service = (provider.nexi_payment_service or '').strip().upper()
+            if not service:
+                service = METHOD_SERVICE.get(self.payment_method_code or '', False) or False
         if service:
             if not re.match(r'^[A-Z0-9_]{2,30}$', service):
                 raise ValidationError(_('Metodo Nexi non valido.'))

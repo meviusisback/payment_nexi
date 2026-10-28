@@ -158,7 +158,7 @@ class PaymentProviderNexi(models.Model):
         return self.env['res.currency'].search([('name', '=', 'EUR')])
 
     def _get_default_payment_method_codes(self):
-        return {'card', 'googlepay', 'applepay', 'bancomatpay', 'mybank', 'paypal'}
+        return {'card', 'googlepay', 'applepay', 'bancomatpay', 'mybank', 'paypal', 'paypal_bnpl'}
 
     def _compute_feature_support_fields(self):
         super()._compute_feature_support_fields()

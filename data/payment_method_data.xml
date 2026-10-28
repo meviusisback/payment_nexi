@@ -22,6 +22,11 @@
     <field name="code">paypal</field>
     <field name="active">True</field>
   </record>
+  <record id="payment_method_nexi_paypal_bnpl" model="payment.method">
+    <field name="name">PayPal Paga in 3</field>
+    <field name="code">paypal_bnpl</field>
+    <field name="active">True</field>
+  </record>
   <record id="payment_method_nexi_mybank" model="payment.method">
     <field name="name">MyBank</field>
     <field name="code">mybank</field>

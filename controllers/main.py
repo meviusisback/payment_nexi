@@ -82,6 +82,7 @@ class NexiController(http.Controller):
                 'reference': tx.reference,
                 'should_tokenize': bool(tokenize),
                 'force_build': True,
+                'no_service': True,
             })
         except Exception as e:
             return {'error': str(e)[:200]}
