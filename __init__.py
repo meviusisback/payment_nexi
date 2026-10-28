@@ -7,11 +7,15 @@ from odoo import api, SUPERUSER_ID
 def post_init_hook(env):
     # Crea il provider Nexi se manca. Semplice: un record solo.
     # Collega tutti i metodi del modulo, così si vedono subito.
+    # Mette i loghi del repo sui metodi, anche su installazioni già fatte.
+    import base64
+    import os
     Provider = env['payment.provider'].sudo()
     Method = env['payment.method'].sudo()
-    methods = Method.search([('code', 'in', [
+    codes = [
         'card', 'googlepay', 'applepay', 'bancomatpay', 'mybank', 'paypal', 'paypal_bnpl',
-    ])])
+    ]
+    methods = Method.search([('code', 'in', codes)])
     vals = {'payment_method_ids': [(6, 0, methods.ids)]} if methods else {}
     existing = Provider.search([('code', '=', 'nexi')])
     if not existing:
@@ -24,3 +28,13 @@ def post_init_hook(env):
         Provider.create(vals)
     else:
         existing.write(vals)
+    base = os.path.join(os.path.dirname(__file__), 'static', 'src', 'img')
+    for code in codes:
+        path = os.path.join(base, code + '.png')
+        if not os.path.isfile(path):
+            continue
+        method = Method.search([('code', '=', code)], limit=1)
+        if not method or method.image:
+            continue
+        with open(path, 'rb') as f:
+            method.write({'image': base64.b64encode(f.read())})
