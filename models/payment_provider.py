@@ -33,6 +33,23 @@ class PaymentProviderNexi(models.Model):
         [('implicit', 'Automatico'), ('explicit', 'Manuale')],
         default='implicit', string='Incasso',
     )
+    # Come mostri la cassa: redirect pagina Nexi (HPP) o form dentro il sito (Build v3).
+    nexi_mode = fields.Selection(
+        [('hpp', 'Hosted Page (redirect)'), ('build', 'Embedded Build v3 (beta)')],
+        default='hpp', string='Modalità',
+        help='HPP = vai su pagina Nexi. Build = form nel tuo sito con iframe Nexi (serve URL pubblico, localhost non va).',
+    )
+    # Preselezione metodo su pagina Nexi. Vuoto = tutti. Valori da tabella Nexi (es. GOOGLEPAY).
+    nexi_payment_service = fields.Char(
+        string='Metodo preselezionato',
+        help='Passato come paymentService a Nexi. Vuoto = tutti i metodi. Valori da tabella codifica PaymentService (es. GOOGLEPAY). Solo maiuscole, cifre, underscore.',
+    )
+    # OneClick CIT: salva carta con contratto e riusala dopo.
+    nexi_oneclick = fields.Boolean(
+        string='OneClick CIT',
+        default=False,
+        help='Se attivo: primo pagamento crea contratto CIT, i dopo riusano contractId via HPP.',
+    )
 
     # --- URL base. Non li metto a mano: li prendi dalla scheda API su developer.nexi.it ---
     nexi_test_url = fields.Char(
@@ -62,6 +79,19 @@ class PaymentProviderNexi(models.Model):
             raise ValidationError(_('URL Nexi non valido: dominio non Nexi.'))
         return url
 
+    def _nexi_build_url(self):
+        """URL ordini Build v3: stesso host di HPP, path /orders/build."""
+        from urllib.parse import urlparse
+        base = self._nexi_base_url()
+        if base.endswith('/orders/hpp'):
+            return base[: -len('/orders/hpp')] + '/orders/build'
+        parts = urlparse(base)
+        host_base = f'{parts.scheme}://{parts.netloc}'
+        prefix = parts.path
+        if '/orders/' in prefix:
+            prefix = prefix.split('/orders/')[0]
+        return host_base + prefix + '/orders/build'
+
     def _get_supported_currencies(self):
         # Nexi sandbox vuole EUR. Tieni solo EUR.
         return self.env['res.currency'].search([('name', '=', 'EUR')])
@@ -80,6 +110,8 @@ class PaymentProviderNexi(models.Model):
     def _get_redirect_form_view(self, is_validation=False):
         self.ensure_one()
         if self.code == 'nexi':
+            if self.nexi_mode == 'build':
+                return self.env.ref('payment_nexi.redirect_build')
             return self.env.ref('payment_nexi.redirect_form')
         return super()._get_redirect_form_view(is_validation=is_validation)
 

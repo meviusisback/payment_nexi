@@ -40,6 +40,20 @@ class PaymentTransactionNexi(models.Model):
     _inherit = 'payment.transaction'
 
     nexi_order_id = fields.Char(string='ID ordine Nexi', readonly=True)
+    nexi_contract_id = fields.Char(
+        string='Contratto OneClick', readonly=True,
+        help='contractId CIT creato al primo pagamento, riusato dopo.',
+    )
+
+    def _nexi_contract_for_partner(self, partner_id):
+        """Ultimo contratto CIT pagato di questo partner, se esiste."""
+        tx = self.search([
+            ('provider_code', '=', 'nexi'),
+            ('partner_id', '=', partner_id),
+            ('nexi_contract_id', '!=', False),
+            ('state', 'in', ['done', 'authorized', 'pending']),
+        ], order='id desc', limit=1)
+        return tx.nexi_contract_id or False
 
     def _get_specific_create_values(self, provider_code, values):
         vals = super()._get_specific_create_values(provider_code, values)
@@ -59,6 +73,37 @@ class PaymentTransactionNexi(models.Model):
         if not provider.nexi_api_key:
             raise ValidationError(_('Manca la X-Api-Key Nexi nel provider.'))
         base = self.get_base_url()
+        session = {
+            'actionType': 'VERIFY' if (provider.nexi_oneclick and not self.amount) else 'PAY',
+            'amount': str(to_cents(self.amount)),
+            'language': 'ITA',
+            'resultUrl': f'{base}/payment/nexi/confirm?ref={self.reference}',
+            'cancelUrl': f'{base}/payment/nexi/confirm?ref={self.reference}&cancel=1',
+            'captureType': 'EXPLICIT' if provider.nexi_capture == 'explicit' else 'IMPLICIT',
+        }
+        # Preselezione metodo: solo se valorizzato, come da tabella Nexi.
+        service = (provider.nexi_payment_service or '').strip().upper()
+        if service:
+            if not re.match(r'^[A-Z0-9_]{2,30}$', service):
+                raise ValidationError(_('Metodo Nexi non valido.'))
+            session['paymentService'] = service
+        # OneClick CIT: primo pagamento crea contratto, dopo riusa contractId.
+        contract = False
+        if provider.nexi_oneclick:
+            contract = self.nexi_contract_id or self._nexi_contract_for_partner(self.partner_id.id)
+            if contract:
+                session['recurrence'] = {
+                    'action': 'SUBSEQUENT_PAYMENT',
+                    'contractId': contract,
+                    'contractType': 'CIT',
+                }
+            else:
+                contract = 'N%06d%011d' % (self.partner_id.id % 1000000, self.id % 100000000000)
+                session['recurrence'] = {
+                    'action': 'CONTRACT_CREATION',
+                    'contractId': contract,
+                    'contractType': 'CIT',
+                }
         payload = {
             'order': {
                 'orderId': self.reference,
@@ -66,14 +111,13 @@ class PaymentTransactionNexi(models.Model):
                 'currency': self.currency_id.name or 'EUR',
                 'description': (self.reference or '')[:100],
             },
-            'paymentSession': {
-                'actionType': 'PAY',
-                'amount': str(to_cents(self.amount)),
-                'language': 'ITA',
-                'resultUrl': f'{base}/payment/nexi/confirm?ref={self.reference}',
-                'cancelUrl': f'{base}/payment/nexi/confirm?ref={self.reference}&cancel=1',
-            },
+            'paymentSession': session,
         }
+        if contract and not self.nexi_contract_id:
+            self.nexi_contract_id = contract
+        # Modalità Build v3: ordine embed invece di HPP.
+        if provider.nexi_mode == 'build':
+            return self._nexi_render_build_values(res, provider, payload)
         url = provider._nexi_base_url()
         try:
             data = provider._nexi_make_request('POST', url, payload=payload)
@@ -103,6 +147,28 @@ class PaymentTransactionNexi(models.Model):
         base = f'{parts.scheme}://{parts.netloc}{parts.path}'
         params = dict(parse_qsl(parts.query))
         res.update(redirect_url=hosted, api_url=base, url_params=params)
+        return res
+
+    def _nexi_render_build_values(self, res, provider, payload):
+        """Ordine Build v3 embed: crea ordine e rimanda a template iframe."""
+        self.ensure_one()
+        base = self.get_base_url()
+        if 'localhost' in (base or '') or '127.0.0.1' in (base or ''):
+            raise ValidationError(_('Build vuole URL pubblico, localhost non va. Usa HPP per i test locali.'))
+        build_url = provider._nexi_build_url()
+        build_payload = dict(payload)
+        build_payload['version'] = '3'
+        build_payload['merchantUrl'] = base
+        try:
+            data = provider._nexi_make_request('POST', build_url, payload=build_payload)
+        except ValidationError as e:
+            self._set_error(str(e))
+            raise
+        res.update(
+            nexi_build=True,
+            build_data=data,
+            redirect_url=f'/payment/nexi/build/{self.reference}',
+        )
         return res
 
     def _get_tx_from_notification_data(self, provider_code, notification_data):

@@ -11,6 +11,23 @@
     </form>
   </template>
 
+  <!-- Redirect Build: rimanda alla pagina embed interna. -->
+  <template id="redirect_build" name="Nexi Build Redirect">
+    <p>Hai scelto pagamento nel sito (Build beta). <a t-att-href="redirect_url">Apri il form di pagamento</a></p>
+  </template>
+
+  <!-- Pagina Build v3 beta: iframe Nexi. Serve URL pubblico, localhost non va. -->
+  <template id="build_page" name="Nexi Build Page">
+    <t t-call="website.layout">
+      <div class="container mt-4">
+        <h3>Paga con Nexi (Build beta)</h3>
+        <p>Build v3 incassa nel sito con iframe Nexi. Se vedi errore, torna a Hosted Page.</p>
+        <div id="nexi-build" t-att-data-tx="tx_reference">Carico il form Nexi…</div>
+        <p><a href="/shop/payment">Torna alla cassa</a></p>
+      </div>
+    </t>
+  </template>
+
   <!-- Campi credenziali nel form provider. -->
   <record id="view_provider_nexi" model="ir.ui.view">
     <field name="name">payment.provider.nexi.form</field>
@@ -21,6 +38,9 @@
         <field name="nexi_api_key" password="True"/>
         <field name="nexi_env"/>
         <field name="nexi_capture"/>
+        <field name="nexi_mode"/>
+        <field name="nexi_payment_service" placeholder="Vuoto=tutti, es. GOOGLEPAY"/>
+        <field name="nexi_oneclick"/>
         <field name="nexi_test_url" placeholder="URL test da developer.nexi.it/it/api/..."/>
         <field name="nexi_prod_url" placeholder="URL produzione da developer.nexi.it/it/api/..."/>
       </xpath>

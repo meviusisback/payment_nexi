@@ -8,7 +8,9 @@ _odoo = types.ModuleType('odoo')
 _odoo._ = lambda s, *a, **k: s % a if a else s
 _models = types.SimpleNamespace(Model=object)
 _odoo.models = _models
-_odoo.fields = types.SimpleNamespace(Char=lambda *a, **k: None, Selection=lambda *a, **k: None)
+_odoo.fields = types.SimpleNamespace(
+    Char=lambda *a, **k: None, Selection=lambda *a, **k: None, Boolean=lambda *a, **k: None,
+)
 _odoo.api = types.SimpleNamespace()
 _odoo.http = types.SimpleNamespace(Controller=object, route=lambda *a, **k: (lambda f: f))
 _odoo.SUPERUSER_ID = 1
@@ -44,6 +46,17 @@ class TestNexiPure(unittest.TestCase):
     def test_amounts(self):
         self.assertTrue(_parse_amount('230') >= _parse_amount('230'))
         self.assertTrue(_parse_amount(0) < _parse_amount('230'))
+
+    def test_service(self):
+        import re
+        self.assertTrue(re.match(r'^[A-Z0-9_]{2,30}$', 'GOOGLEPAY'))
+        self.assertFalse(re.match(r'^[A-Z0-9_]{2,30}$', 'a'))
+        self.assertFalse(re.match(r'^[A-Z0-9_]{2,30}$', '../../etc'))
+
+    def test_contract(self):
+        cid = 'N%06d%011d' % (3, 12)
+        self.assertEqual(len(cid), 18)
+        self.assertTrue(cid.startswith('N'))
 
     def test_test_keys_present(self):
         # Le chiavi finte devono essere quelle note, mai vuote.

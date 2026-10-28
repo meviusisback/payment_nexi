@@ -13,3 +13,12 @@ class NexiController(http.Controller):
         )
         tx._process_notification_data(kw)
         return request.redirect('/payment/status')
+
+    @http.route('/payment/nexi/build/<string:reference>', type='http', auth='public', methods=['GET'])
+    def nexi_build(self, reference, **kw):
+        tx = request.env['payment.transaction'].sudo().search([
+            ('reference', '=', reference), ('provider_code', '=', 'nexi'),
+        ], limit=1)
+        if not tx:
+            return request.not_found()
+        return request.render('payment_nexi.build_page', {'tx_reference': tx.reference})
