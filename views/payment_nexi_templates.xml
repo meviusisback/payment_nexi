@@ -262,6 +262,15 @@
           <script>
             (function () {
               var done = false;
+              window.addEventListener('error', function (e) {
+                try {
+                  fetch('/payment/nexi/build/jserror', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({msg: String((e &amp;&amp; e.message) || e).slice(0, 300)}),
+                  }).catch(function () {});
+                } catch (ee) {}
+              });
               function submitBtn() { return document.querySelector('button[name="o_payment_submit_button"]'); }
               function showSubmit(show) {
                 var b = submitBtn();

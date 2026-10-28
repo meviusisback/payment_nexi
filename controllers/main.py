@@ -83,6 +83,8 @@ class NexiController(http.Controller):
                 'should_tokenize': False,
                 'force_build': True,
             })
+            _logger = __import__('logging').getLogger(__name__ + '.prepare')
+            _logger.warning('prepare %s card_fields=%s', tx.reference, len(res_cards.get('build_fields') or []))
             res_buttons = tx._get_specific_rendering_values({
                 'amount': tx.amount,
                 'currency_id': tx.currency_id.id,
@@ -94,6 +96,8 @@ class NexiController(http.Controller):
                 'order_suffix': '-m',
             })
         except Exception as e:
+            import logging as _logging
+            _logging.getLogger(__name__ + '.prepare').warning('prepare KO: %s', str(e)[:200])
             return {'error': str(e)[:200]}
         host = 'https://xpaysandbox.nexigroup.com' if provider.nexi_env == 'test' else 'https://xpay.nexigroup.com'
         return {
@@ -104,6 +108,12 @@ class NexiController(http.Controller):
             'finalize_url': f'/payment/nexi/build/{tx.reference}/finalize',
             'confirm_url': f'/payment/nexi/confirm?ref={tx.reference}',
         }
+
+    @http.route('/payment/nexi/build/jserror', type='json', auth='public', website=True, methods=['POST'], csrf=False)
+    def nexi_build_jserror(self, msg=None, **kw):
+        import logging as _logging
+        _logging.getLogger(__name__ + '.js').warning('browser: %s', str(msg)[:300])
+        return True
 
     @http.route('/payment/nexi/build/<string:reference>/fields', type='http', auth='public', website=True, methods=['GET'])
     def nexi_build_fields(self, reference, **kw):
