@@ -101,10 +101,11 @@ class PaymentProviderNexi(models.Model):
 
     def _compute_feature_support_fields(self):
         super()._compute_feature_support_fields()
-        # v1 semplice: niente token, niente rimborso, niente cattura manuale.
+        # v1 semplice: niente rimborso, niente cattura manuale.
+        # Token solo se OneClick acceso: mostra "salva carta" in cassa.
         for p in self.filtered(lambda r: r.code == 'nexi'):
             p.support_refund = 'none'
-            p.support_tokenization = False
+            p.support_tokenization = bool(p.nexi_oneclick)
             p.support_manual_capture = False
 
     def _get_redirect_form_view(self, is_validation=False):
