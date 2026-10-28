@@ -14,6 +14,20 @@ _logger = logging.getLogger(__name__)
 NEXI_HOSTS = ('xpaysandbox.nexigroup.com', 'xpay.nexi.it')
 
 
+def _nexi_error_detail(resp):
+    """Prima descrizione utile da Nexi, senza dati sensibili."""
+    try:
+        errs = (resp.json() or {}).get('errors') or []
+        if errs and isinstance(errs[0], dict):
+            desc = str(errs[0].get('description') or '')
+            code = str(errs[0].get('code') or '')
+            if desc:
+                return '%s [%s]' % (desc[:160], code[:16]) if code else desc[:160]
+    except (ValueError, AttributeError):
+        pass
+    return 'errore. Riprova.'
+
+
 class PaymentProviderNexi(models.Model):
     _inherit = 'payment.provider'
 
@@ -177,8 +191,8 @@ class PaymentProviderNexi(models.Model):
             try:
                 resp.raise_for_status()
             except requests.exceptions.HTTPError:
-                _logger.exception('Nexi errore HTTP su %s', url)
-                raise ValidationError(_('Nexi errore. Riprova.'))
+                _logger.error('Nexi %s %s -> %s', method, url, (resp.text or '')[:500])
+                raise ValidationError(_('Nexi: %s') % _nexi_error_detail(resp))
         except requests.exceptions.RequestException:
             _logger.exception('Nexi non raggiungibile: %s', url)
             raise ValidationError(_('Nexi non raggiungibile. Riprova.'))

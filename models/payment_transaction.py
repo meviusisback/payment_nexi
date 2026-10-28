@@ -135,6 +135,43 @@ class PaymentTransactionNexi(models.Model):
             vals['nexi_order_id'] = values.get('reference')
         return vals
 
+    def _nexi_post_order(self, provider, url, payload, want_save=False):
+        """Crea ordine su Nexi. Se il contratto è morto, lo dimentica e riprova."""
+        try:
+            return provider._nexi_make_request('POST', url, payload=payload)
+        except ValidationError as e:
+            session = (payload or {}).get('paymentSession') or {}
+            rec = session.get('recurrence') or {}
+            if 'contract' not in str(e).lower() or rec.get('action') != 'SUBSEQUENT_PAYMENT':
+                raise
+            dead = rec.get('contractId')
+            _logger.warning('Nexi contratto morto %s, riprovo senza.', dead)
+            if dead:
+                self.search([
+                    ('provider_code', '=', 'nexi'),
+                    ('partner_id', 'in', self._nexi_family_ids(self.partner_id.id)),
+                    ('nexi_contract_id', '=', dead),
+                ]).write({'nexi_contract_id': False})
+                if self.nexi_contract_id == dead:
+                    self.nexi_contract_id = False
+            session = dict(session)
+            session.pop('recurrence', None)
+            if want_save:
+                contract = 'N%06d%011d' % (
+                    self.partner_id.id % 1000000, self.id % 100000000000)
+                session['recurrence'] = {
+                    'action': 'CONTRACT_CREATION',
+                    'contractId': contract,
+                    'contractType': 'CIT',
+                }
+                self.nexi_contract_id = contract
+            payload = dict(payload, paymentSession=session)
+            try:
+                return provider._nexi_make_request('POST', url, payload=payload)
+            except ValidationError as e2:
+                self._set_error(str(e2))
+                raise
+
     def _get_specific_rendering_values(self, processing_values):
         """Valori per il form redirect. Qui creiamo l'ordine su Nexi."""
         res = super()._get_specific_rendering_values(processing_values)
@@ -203,10 +240,10 @@ class PaymentTransactionNexi(models.Model):
             self.nexi_contract_id = contract
         # Modalità Build v3: ordine embed invece di HPP.
         if provider.nexi_mode == 'build':
-            return self._nexi_render_build_values(res, provider, payload)
+            return self._nexi_render_build_values(res, provider, payload, want_save)
         url = provider._nexi_base_url()
         try:
-            data = provider._nexi_make_request('POST', url, payload=payload)
+            data = self._nexi_post_order(provider, url, payload, want_save)
         except ValidationError as e:
             self._set_error(str(e))
             raise
@@ -235,7 +272,7 @@ class PaymentTransactionNexi(models.Model):
         res.update(redirect_url=hosted, api_url=base, url_params=params)
         return res
 
-    def _nexi_render_build_values(self, res, provider, payload):
+    def _nexi_render_build_values(self, res, provider, payload, want_save=False):
         """Ordine Build v3 embed: crea ordine e rimanda a template iframe."""
         self.ensure_one()
         base = self.get_base_url()
@@ -254,7 +291,7 @@ class PaymentTransactionNexi(models.Model):
                 if k != 'paymentService'
             }
         try:
-            data = provider._nexi_make_request('POST', build_url, payload=build_payload)
+            data = self._nexi_post_order(provider, build_url, build_payload, want_save)
         except ValidationError as e:
             self._set_error(str(e))
             raise
