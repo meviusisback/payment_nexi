@@ -32,11 +32,6 @@
     <field name="code">bancomatpay</field>
     <field name="active">True</field>
   </record>
-  <record id="payment_method_nexi_paypal_bnpl" model="payment.method">
-    <field name="name">PayPal 3 rate</field>
-    <field name="code">paypal_bnpl</field>
-    <field name="active">True</field>
-  </record>
   <record id="payment_method_nexi_visa" model="payment.method">
     <field name="name">Visa</field>
     <field name="code">visa</field>

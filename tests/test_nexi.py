@@ -63,7 +63,7 @@ class TestNexiPure(unittest.TestCase):
         self.assertEqual(METHOD_SERVICE.get('googlepay'), 'GOOGLEPAY')
         self.assertEqual(METHOD_SERVICE.get('mybank'), 'MYBANK')
         self.assertEqual(METHOD_SERVICE.get('bancomatpay'), 'BANCOMATPAY')
-        self.assertEqual(METHOD_SERVICE.get('paypal_bnpl'), 'PAYPAL_BNPL')
+        self.assertEqual(METHOD_SERVICE.get('paypal'), 'PAYPAL')
 
     def test_test_keys_present(self):
         # Le chiavi finte devono essere quelle note, mai vuote.

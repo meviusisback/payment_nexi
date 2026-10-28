@@ -22,7 +22,6 @@ METHOD_SERVICE = {
     'bancomatpay': 'BANCOMATPAY',
     'mybank': 'MYBANK',
     'paypal': 'PAYPAL',
-    'paypal_bnpl': 'PAYPAL_BNPL',
 }
 
 REF_RE = re.compile(r'^[A-Za-z0-9_-]{4,64}$')

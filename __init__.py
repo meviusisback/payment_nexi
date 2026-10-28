@@ -13,11 +13,18 @@ def post_init_hook(env):
     Provider = env['payment.provider'].sudo()
     Method = env['payment.method'].sudo()
     codes = [
-        'card', 'googlepay', 'applepay', 'bancomatpay', 'mybank', 'paypal', 'paypal_bnpl',
+        'card', 'googlepay', 'applepay', 'bancomatpay', 'mybank', 'paypal',
         'visa', 'mastercard', 'amex',
     ]
     methods = Method.search([('code', 'in', codes)])
     vals = {'payment_method_ids': [(6, 0, methods.ids)]} if methods else {}
+    # PayPal 3 rate tolto: Nexi ignora PAYPAL_BNPL e mostra la pagina carte.
+    bad = Method.search([('code', '=', 'paypal_bnpl')])
+    if bad:
+        try:
+            bad.unlink()
+        except Exception:
+            bad.write({'provider_ids': [(6, 0, [])]})
     existing = Provider.search([('code', '=', 'nexi')])
     if not existing:
         vals.update({
