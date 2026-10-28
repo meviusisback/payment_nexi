@@ -22,36 +22,24 @@ modulo montato in `/mnt/extra-addons/payment_nexi`, provider Nexi id 18,
   di tutti gli APM) e restituisce `fields`, `buttons`, `sdk`, `finalize_url`.
   Verificato da shell e da curl: 5 campi carta + 15 bottoni.
 
-## Cosa non funziona (problema aperto)
+## Stato Build in cassa (risolto)
 
-In cassa, modalità Build, il browser **non renderizza** quello che il server
-restituisce:
+Verificato con browser vero sulla cassa:
 
-- la riga Carta resta vuota (nessun campo carta visibile);
-- le righe APM mostrano solo il bottone Bancomat Pay (un iframe) e le altre
-  righe restano vuote;
-- il `POST /payment/nexi/build/prepare` arriva al server e risponde con i dati
-  giusti (log: `prepare S00011-8 card_fields=5`), ma la pagina non cambia.
+- riga Carta: numero carta, scadenza, CVV, intestatario, email, privacy;
+- righe APM: solo il bottone Nexi (radio e testi nascosti col CSS);
+- righe senza bottone (es. PayPal Paga in 3) nascoste da sole;
+- la carta resta chiusa all'avvio e si apre al click;
+- loghi circuiti 39x26 allineati.
 
-Cose già escluse:
-- il server: la risposta è corretta, verificata con curl autenticato e da shell;
-- il provider: `nexi_mode = build`, `state = test`, `is_published = True`;
-- l'upgrade del modulo: un `XMLSyntaxError` in un commit precedente aveva
-  impedito l'aggiornamento, ora risolto (`503c5cd`);
-- `:has()` non supportato: Firefox 158 lo supporta.
+Due cause risolte, da non reintrodurre:
 
-Piste da guardare, in ordine:
-1. ordine di esecuzione del JS dentro `views/payment_nexi_templates.xml`
-   (`xpath //div[p[@name='o_payment_secured_by']] position="after"`): lo script
-   gira quando le righe successive non esistono ancora;
-2. la funzione `prepare()` viene chiamata tre volte (al load, sul change, sul
-   pre-checked): c'è un `done` condiviso che potrebbe bloccare il secondo giro
-   lasciando la UI a metà;
-3. log browser: esiste `POST /payment/nexi/build/jserror` che registra gli
-   errori JS (`docker logs docker-test-odoo-1 | grep browser`), ma finora non ha
-   ricevuto nulla — se il renderer muore senza eccezione, cercare altrove;
-4. verificare con la console del browser cosa contiene
-   `#nexi-inline-fields` dopo il prepare.
+1. i contenitori Build devono stare FUORI da `div[name=o_payment_inline_form]`
+   (che Odoo tiene `d-none`), altrimenti i campi esistono ma sono invisibili;
+2. `merchantUrl` deve essere l'host reale della richiesta
+   (`request.httprequest.host_url`, con `X-Forwarded-Proto`), non
+   `web.base.url`: Nexi confronta il dominio degli iframe e con localhost
+   rifiuta di disegnarli.
 
 ## File chiave
 

@@ -293,6 +293,8 @@
               li[name=o_payment_option]:has(.nexi-apm-inline) div[for="o_payment_radio"]{display:none !important}
               li[name=o_payment_option]:has(.nexi-apm-inline) p[name="o_payment_secured_by"]{display:none !important}
               li[name=o_payment_option]:has(.nexi-apm-inline) span.rounded.overflow-hidden{display:none !important}
+              li[name=o_payment_option] span.rounded.overflow-hidden{width:auto !important;height:26px !important;min-width:26px;background:transparent !important;box-shadow:none !important}
+              li[name=o_payment_option] span.rounded.overflow-hidden img{height:26px !important;width:auto !important;max-width:54px;object-fit:contain;min-height:0 !important}
             </style>
             <div id="nexi-inline" class="w-100 d-none">
               <div id="nexi-inline-fields" class="d-flex flex-column gap-2 my-2">
@@ -307,6 +309,16 @@
             <script>
             (function () {
               var done = false;
+              // I loghi dei metodi nascono lazy dentro un contenitore stretto e
+              // restano 0x0: forzo il caricamento e tolgo l'altezza 1px.
+              document.querySelectorAll('li[name=o_payment_option] img').forEach(function (im) {
+                im.setAttribute('loading', 'eager');
+                im.removeAttribute('style');
+                if (im.complete &amp;&amp; im.naturalWidth === 0) {
+                  var src = im.getAttribute('src');
+                  im.setAttribute('src', src);
+                }
+              });
               window.addEventListener('error', function (e) {
                 try {
                   fetch('/payment/nexi/build/jserror', {
@@ -348,11 +360,11 @@
                 s.onerror = function () { fail('SDK Nexi non caricato. Riprova.'); };
                 document.head.appendChild(s);
               }
-              function prepare() {
+              function prepare(show) {
                 var box = document.getElementById('nexi-inline');
-                if (!box || done) return;
+                if (!box || done) { return; }
                 done = true;
-                box.classList.remove('d-none');
+                if (show) box.classList.remove('d-none');
                 var tok = document.querySelector('input[name="o_payment_tokenize_checkbox"]');
                 var tokBox = tok ? tok.closest('div[name="o_payment_tokenize_container"], div.o-checkbox') : null;
                 if (tokBox) tokBox.style.display = 'none';
@@ -442,37 +454,39 @@
                   window.location.href = box.dataset.confirm;
                 }).catch(function () { fail('Conferma non riuscita. Riprova.'); });
               }
+              document.addEventListener('click', function (ev) {
+                var t = ev.target;
+                if (!t || t.name !== 'o_payment_radio' || !t.dataset) return;
+                if (t.dataset.paymentMethodCode !== 'card') return;
+                var box = document.getElementById('nexi-inline');
+                if (box) {
+                  box.classList.remove('d-none');
+                  if (!box.querySelector('iframe')) { done = false; }
+                }
+                prepare(true);
+              });
               document.addEventListener('change', function (ev) {
                 var t = ev.target;
-                if (t &amp;&amp; t.name === 'o_payment_radio' &amp;&amp; t.dataset &amp;&amp; t.dataset.paymentMethodCode === 'card') {
-                  document.querySelectorAll('.nexi-apm-inline').forEach(function (x) { x.classList.add('d-none'); });
-                  var box = document.getElementById('nexi-inline');
+                if (!t || t.name !== 'o_payment_radio') return;
+                var isCard = t.dataset &amp;&amp; t.dataset.paymentMethodCode === 'card';
+                var box = document.getElementById('nexi-inline');
+                document.querySelectorAll('.nexi-apm-inline').forEach(function (x) { x.classList.add('d-none'); });
+                if (isCard) {
                   if (box) {
                     box.classList.remove('d-none');
                     if (!box.querySelector('iframe')) { done = false; }
                   }
-                  prepare();
-                } else if (t &amp;&amp; t.name === 'o_payment_radio') {
-                  var box2 = document.getElementById('nexi-inline');
-                  if (box2) box2.classList.add('d-none');
+                  prepare(true);
+                } else {
+                  if (box) box.classList.add('d-none');
                   var li = t.closest('li[name=o_payment_option]');
-                  document.querySelectorAll('.nexi-apm-inline').forEach(function (x) { x.classList.add('d-none'); });
                   var ap = li ? li.querySelector('.nexi-apm-inline') : null;
                   if (ap) { ap.classList.remove('d-none'); }
-                  prepare();
+                  prepare(false);
                 }
               });
-              var pre = document.querySelector('input[name="o_payment_radio"]:checked');
-              if (pre) {
-                var preLi = pre.closest('li[name=o_payment_option]');
-                var preAp = preLi ? preLi.querySelector('.nexi-apm-inline') : null;
-                if (preAp) { preAp.classList.remove('d-none'); }
-                else if (pre.dataset &amp;&amp; pre.dataset.paymentMethodCode === 'card') {
-                  var box3 = document.getElementById('nexi-inline');
-                  if (box3) box3.classList.remove('d-none');
-                }
-              }
-              prepare();
+              // Carico in background ma NON apro: la carta si apre solo se la scegli.
+              prepare(false);
               setTimeout(function () {
                 var fb = document.getElementById('nexi-inline-fields');
                 if (fb &amp;&amp; !fb.querySelector('iframe')) {
