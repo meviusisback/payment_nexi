@@ -4,7 +4,7 @@ import logging
 import re
 from decimal import Decimal, InvalidOperation
 
-from odoo import _, fields, models
+from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
 
 _logger = logging.getLogger(__name__)
@@ -60,15 +60,65 @@ class PaymentTransactionNexi(models.Model):
         help='Numero mascherato da Nexi (es. ****7289). Mai la carta vera.',
     )
 
+    def _nexi_family_ids(self, partner_id):
+        """Partner + contatti collegati: il contratto vale per tutta la famiglia."""
+        partner = self.env['res.partner'].browse(partner_id)
+        if not partner.exists():
+            return []
+        commercial = partner.commercial_partner_id.id or partner.id
+        return self.env['res.partner'].search(
+            [('id', 'child_of', commercial)]
+        ).ids or [partner_id]
+
     def _nexi_contract_for_partner(self, partner_id):
         """Ultimo contratto CIT pagato di questo partner, se esiste."""
+        family = self._nexi_family_ids(partner_id)
+        if not family:
+            return False
         tx = self.search([
             ('provider_code', '=', 'nexi'),
-            ('partner_id', '=', partner_id),
+            ('partner_id', 'in', family),
             ('nexi_contract_id', '!=', False),
             ('state', 'in', ['done', 'authorized', 'pending']),
         ], order='id desc', limit=1)
         return tx.nexi_contract_id or False
+
+    @api.model
+    def get_nexi_saved_cards(self, partner_id):
+        """Carte salvate del cliente (solo numeri mascherati). Per la cassa."""
+        family = self._nexi_family_ids(partner_id)
+        if not family:
+            return []
+        txs = self.search([
+            ('provider_code', '=', 'nexi'),
+            ('partner_id', 'in', family),
+            ('nexi_contract_id', '!=', False),
+            ('state', 'in', ['done', 'authorized', 'pending']),
+        ], order='id desc')
+        seen = set()
+        cards = []
+        for tx in txs:
+            if tx.nexi_contract_id in seen:
+                continue
+            seen.add(tx.nexi_contract_id)
+            cards.append({
+                'masked': tx.nexi_masked_pan or 'Carta salvata',
+                'contract_id': tx.nexi_contract_id,
+            })
+        return cards
+
+    @api.model
+    def get_last_used_method_id(self, partner_id, method_ids):
+        """Ultimo metodo usato dal cliente, se ancora disponibile. Per preselezione."""
+        family = self._nexi_family_ids(partner_id)
+        if not family or not method_ids:
+            return False
+        tx = self.search([
+            ('partner_id', 'in', family),
+            ('payment_method_id', 'in', list(method_ids)),
+            ('state', 'in', ['done', 'authorized', 'pending', 'draft']),
+        ], order='id desc', limit=1)
+        return tx.payment_method_id.id if tx else False
 
     def _get_specific_create_values(self, provider_code, values):
         vals = super()._get_specific_create_values(provider_code, values)

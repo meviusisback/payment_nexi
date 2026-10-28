@@ -72,10 +72,11 @@ Ordine test vero:
 - Il cliente loggato vede `Save my payment details` solo su `Carta`.
 - Con spunta: primo paga e crea contratto `CONTRACT_CREATION` tipo `CIT`.
 - Senza spunta: paga normale, niente contratto.
-- Dopo: riusa `contractId` con `SUBSEQUENT_PAYMENT`.
-- Ospiti: niente spunta (limite Odoo), quindi niente contratto.
+- Carte salvate: in cassa vedi `Le tue carte salvate` (solo numeri mascherati, mai la carta vera). `Usa questa` seleziona Carta: su Nexi la ritrovi già pronta e riusa il contratto con `SUBSEQUENT_PAYMENT`.
+- Ospiti: niente spunta e niente lista (limite Odoo), quindi niente contratto.
 - Importo zero con OneClick = `VERIFY`, nessun addebito.
 - `AUTHORIZED` resta autorizzato, non diventa incassato.
+- Ultimo metodo usato già selezionato alla cassa successiva.
 
 ## Build v3 beta
 

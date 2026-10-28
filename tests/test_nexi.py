@@ -11,7 +11,7 @@ _odoo.models = _models
 _odoo.fields = types.SimpleNamespace(
     Char=lambda *a, **k: None, Selection=lambda *a, **k: None, Boolean=lambda *a, **k: None,
 )
-_odoo.api = types.SimpleNamespace()
+_odoo.api = types.SimpleNamespace(model=lambda f: f)
 _odoo.http = types.SimpleNamespace(Controller=object, route=lambda *a, **k: (lambda f: f))
 _odoo.SUPERUSER_ID = 1
 sys.modules['odoo'] = _odoo

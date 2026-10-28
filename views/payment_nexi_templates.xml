@@ -28,6 +28,43 @@
     </t>
   </template>
 
+  <!-- Cassa: preseleziona ultimo metodo + mostra carte salvate Nexi. -->
+  <record id="view_payment_form_nexi" model="ir.ui.view">
+    <field name="name">payment.form.nexi.saved</field>
+    <field name="model">ir.ui.view</field>
+    <field name="inherit_id" ref="payment.form"/>
+    <field name="arch" type="xml">
+      <xpath expr="//t[@t-set='selected_method_id']" position="attributes">
+        <attribute name="t-value">not selected_token_id and (request.env['payment.transaction'].sudo().get_last_used_method_id(partner_id, payment_methods_sudo.ids) or (len(payment_methods_sudo) == 1 and payment_methods_sudo[:1].id))</attribute>
+      </xpath>
+      <xpath expr="//div[@id='o_payment_form_options']/div[1]" position="after">
+        <t t-set="nexi_cards" t-value="request.env['payment.transaction'].sudo().get_nexi_saved_cards(partner_id)"/>
+        <div t-if="nexi_cards" id="o_payment_nexi_saved" class="d-flex flex-column gap-3">
+          <div>
+            <h4 class="fs-6 small text-uppercase fw-bolder">Le tue carte salvate</h4>
+            <ul class="list-group">
+              <t t-foreach="nexi_cards" t-as="nc">
+                <li class="list-group-item d-flex justify-content-between align-items-center py-3">
+                  <span><i class="fa fa-credit-card"/> <t t-esc="nc['masked']"/></span>
+                  <button type="button" class="btn btn-link nexi-use-saved p-0">Usa questa</button>
+                </li>
+              </t>
+            </ul>
+            <p class="small text-600 mt-1">Scegli Carta qui sotto: su Nexi la ritrovi già pronta.</p>
+          </div>
+          <script>
+            document.addEventListener('click', function (ev) {
+              var b = ev.target.closest('.nexi-use-saved');
+              if (!b) return;
+              var r = document.querySelector('input[data-payment-method-code="card"]');
+              if (r &amp;&amp; !r.checked) r.click();
+            });
+          </script>
+        </div>
+      </xpath>
+    </field>
+  </record>
+
   <!-- Campi credenziali nel form provider. -->
   <record id="view_provider_nexi" model="ir.ui.view">
     <field name="name">payment.provider.nexi.form</field>
