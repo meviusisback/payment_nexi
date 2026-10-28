@@ -78,6 +78,12 @@ Ordine test vero:
 - `AUTHORIZED` resta autorizzato, non diventa incassato.
 - Ultimo metodo usato già selezionato alla cassa successiva.
 
+## Metodi e disponibilità su Nexi
+
+- Valori `paymentService` da tabella ufficiale Nexi.
+- Se Nexi risponde `not enabled for this terminal`: quel metodo non è attivo sul tuo terminale. Lo attivi dal back office Nexi (produzione) o nascondi il metodo in Odoo finché non serve.
+- Verificato in sandbox: carte, Google Pay, Apple Pay, PayPal 3 rate ok. MyBank, Bancomat Pay, PayPal: terminale di prova non abilitato.
+
 ## Build v3 beta
 
 - Metti `Modalità` = Embedded Build v3.
