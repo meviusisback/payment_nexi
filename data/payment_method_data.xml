@@ -5,6 +5,7 @@
     <field name="name">Carta</field>
     <field name="code">card</field>
     <field name="active">True</field>
+    <field name="support_tokenization">True</field>
   </record>
   <record id="payment_method_nexi_googlepay" model="payment.method">
     <field name="name">Google Pay</field>
