@@ -154,12 +154,14 @@ class PaymentTransactionNexi(models.Model):
             if not re.match(r'^[A-Z0-9_]{2,30}$', service):
                 raise ValidationError(_('Metodo Nexi non valido.'))
             session['paymentService'] = service
-        # OneClick CIT: solo se il cliente spunta "salva carta".
+        # OneClick CIT: solo carte e solo se il cliente spunta "salva carta".
+        # I contratti CIT nascono dalla carta: riusarli con APM dà errore Nexi.
         # Primo pagamento con spunta = CONTRACT_CREATION.
         # Dopo riusa contractId con SUBSEQUENT_PAYMENT via HPP.
         contract = False
+        is_card = (self.payment_method_code or '') == 'card'
         want_save = bool(processing_values.get('should_tokenize')) if provider.nexi_oneclick else False
-        if provider.nexi_oneclick:
+        if provider.nexi_oneclick and is_card:
             contract = self.nexi_contract_id or self._nexi_contract_for_partner(self.partner_id.id)
             if contract:
                 session['recurrence'] = {
