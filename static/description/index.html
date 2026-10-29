@@ -1,12 +1,38 @@
 <html><body>
-<h1>Nexi XPay Web per Odoo</h1>
-<p>Paghi sulla pagina Nexi. Odoo non vede mai la carta.</p>
-<h2>Setup</h2>
+<h1>Nexi XPay Web per Odoo 18</h1>
+<p>Accetta pagamenti con <strong>Nexi XPay Web</strong> direttamente nella cassa Odoo.
+Due modalità: <em>Hosted Page</em> (redirect alla pagina Nexi) oppure <em>Embedded Build v3</em>
+con i campi carta dentro la cassa. Nessun dato carta viene salvato in Odoo.</p>
+
+<h2>Funzioni</h2>
+<ul>
+  <li>Hosted Page o campi carta incorporati (Build v3).</li>
+  <li>Carta, Google Pay, Apple Pay, Bancomat Pay, MyBank, PayPal e PayPal Paga in 3.</li>
+  <li>Esito sempre verificato lato server su Nexi, con controllo di importo e valuta.</li>
+  <li>Solo il PAN mascherato in Odoo (es. <code>**** 1234</code>).</li>
+  <li>Salvataggio carta (OneClick) opzionale, con consenso del cliente.</li>
+  <li>Pulsante <em>Verifica metodi su Nexi</em> per nascondere i metodi non attivi sul terminale.</li>
+</ul>
+
+<h2>Configurazione</h2>
 <ol>
-<li>Installa il modulo.</li>
-<li>Vai in Contabilità / Sito / Fornitori di pagamento / Nexi.</li>
-<li>Metti X-Api-Key e scegli Test.</li>
-<li>Prova con carta 4999340261977289, 12/30, 663.</li>
-<li>Passa a Produzione solo dopo i test.</li>
+  <li>Installa il modulo e apri <em>Fornitori di pagamento → Nexi XPay Web</em>.</li>
+  <li>Inserisci la <code>X-Api-Key</code> del terminale e scegli Test o Produzione.</li>
+  <li>Scegli la modalità: Hosted Page oppure Embedded (serve un URL pubblico HTTPS).</li>
+  <li>Pubblica il provider.</li>
 </ol>
+
+<h2>Prova</h2>
+<p>Usa le carte di test pubblicate da Nexi nella documentazione XPay e completa il 3DS di prova.
+La transazione deve risultare <code>done</code> con esito <code>EXECUTED</code>.</p>
+
+<h2>Note</h2>
+<ul>
+  <li>Solo EUR.</li>
+  <li>Nessun rimborso e nessuna cattura manuale.</li>
+  <li>PayPal Paga in 3 richiede almeno 30 € di ordine.</li>
+  <li>In modalità Embedded i campi carta sono iframe di Nexi e non sono personalizzabili.</li>
+</ul>
+
+<p>Licenza LGPL-3.</p>
 </body></html>

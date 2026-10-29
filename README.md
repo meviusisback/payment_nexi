@@ -1,108 +1,96 @@
-# payment_nexi — Nexi XPay Web per Odoo
+# payment_nexi — Nexi XPay Web per Odoo 18
 
-Paga con Nexi XPay Web. Solo redirect Hosted Page.
-Odoo non vede mai la carta. Semplice e veloce.
+Provider di pagamento per **Nexi XPay Web** (API REST con `X-Api-Key`).
+Due modalità: **Hosted Page** (redirect alla pagina Nexi) ed **Embedded Build v3**
+(campi carta dentro la cassa Odoo). Odoo non vede mai il numero di carta.
 
 ## Cosa fa
 
-- Crea ordine su Nexi con `X-Api-Key` + `Correlation-Id`.
-- Ti manda su pagina Nexi, poi torni su Odoo.
-- Verifica con `GET /orders/{ref}` prima di segnare pagato.
-- `EXECUTED` + importo e valuta giusti = fatto.
-- `AUTHORIZED` = solo bloccato, non incassato.
-- `CANCELED`, `THREEDS_FAILED`, `DENIED`, `ERROR` = annullato.
+- Crea l'ordine su Nexi e mostra la pagina di pagamento (o i campi in cassa).
+- Verifica sempre l'esito **lato server** con `GET /orders/{riferimento}`: il ritorno del browser non è mai credibile.
+- Segna la transazione `done` solo con esito `EXECUTED`, importo e valuta corretti.
+- `AUTHORIZED` = solo autorizzato, non incassato.
+- `CANCELED`, `THREEDS_FAILED`, `DENIED`, `ERROR` = transazione annullata.
+- Salva solo il PAN mascherato (`**** 1234`), mai il numero completo né il CVV.
 
-## Cosa NON fa (v1)
+## Metodi inclusi
 
-- Niente rimborso (`support_refund=none`).
-- Niente cattura manuale (`support_manual_capture=False`).
+| Metodo | Codice Nexi |
+|---|---|
+| Carta | `CARDS` |
+| Google Pay | `GOOGLEPAY` |
+| Apple Pay | `APPLEPAY` |
+| Bancomat Pay | `BANCOMATPAY` |
+| MyBank | `MYBANK` |
+| PayPal | `PAYPAL` |
+| PayPal Paga in 3 | `PAYPAL_PAGAIN3` |
+
+I metodi non abilitati sul terminale si nascondono con il pulsante
+**Verifica metodi su Nexi** nel form del provider.
+
+## Requisiti
+
+- Odoo 18 (modulo `payment`).
+- Terminale Nexi XPay Web con `X-Api-Key`.
+- Valuta **EUR** (Nexi rifiuta le altre).
+- Per la modalità Embedded serve un **URL pubblico**: Nexi non accetta `localhost`.
+
+## Installazione
+
+1. Copia la cartella `payment_nexi` negli addons di Odoo.
+2. Riavvia Odoo e installa **Nexi XPay Web** da App.
+3. Vai su *Fornitori di pagamento → Nexi XPay Web* e compila i campi.
+4. Pubblica il provider.
+5. Controlla che esista una riga di pagamento collegata al provider
+   (*Contabilità → Configurazione → Metodi di pagamento*), altrimenti Odoo non crea la transazione.
+
+## Configurazione
+
+| Campo | Cosa mettere |
+|---|---|
+| `X-Api-Key` | Chiave del terminale XPay Web |
+| Ambiente | Test o Produzione |
+| URL Nexi (test/produzione) | Endpoint `…/psp/api/v1/orders/hpp` |
+| Modalità | **Hosted Page** o **Embedded (Build v3)** |
+| Metodo preselezionato | Vuoto = tutti, oppure es. `GOOGLEPAY` |
+| OneClick | Crea e riusa un contratto per le carte salvate (Hosted Page) |
+| Verifica metodi su Nexi | Nasconde in cassa i metodi non attivi sul terminale |
+
+Le chiavi di test sono quelle pubblicate da Nexi nella documentazione XPay
+(*Introduzione → API key*). Non vanno inserite nel repository.
+
+## Prova in sandbox
+
+1. Metti il provider in **Test** con la chiave sandbox di Nexi.
+2. Compra un prodotto, scegli Nexi e paga con una delle carte di test pubblicate
+   da Nexi (es. `4999340261977289`, scadenza `12/30`, CVV `663`: dati finti di sandbox).
+3. Sulla pagina 3DS di prova scegli *AUTENTICAZIONE RIUSCITA*.
+4. La transazione deve risultare `done` con `Nexi OK: EXECUTED`.
+
+## Limiti noti
+
+- Nessun rimborso e nessuna cattura manuale: l'incasso è sempre automatico.
 - Solo EUR.
-- OneClick solo carte, con spunta cliente.
-
-## Installa
-
-1. Copia `payment_nexi` in `addons` di Odoo 18.
-2. Riavvia Odoo, Installa `Nexi XPay Web` da App.
-3. Vai su Fornitori pagamento > Nexi:
-   - Ambiente: Test
-   - `X-Api-Key`: chiave test
-   - `URL test Nexi`: es. `https://xpaysandbox.nexigroup.com/api/phoenix-0.0/psp/api/v1/orders/hpp`
-   - Incasso: Automatico
-   - Modalità: Hosted Page (Build solo con URL pubblico)
-   - OneClick: acceso se vuoi `Salva carta`
-   - Pubblica.
-4. I 7 metodi arrivano da soli: Carta, Google Pay, Apple Pay, Bancomat Pay, MyBank, PayPal, PayPal 3 rate.
-5. Collega riga pagamento Bank a Nexi (serve per creare pagamento).
-
-## Prova
-
-1. Shop > prodotto 1 €, cassa, scegli Nexi.
-2. Carta test `4999340261977289` 12/30 663.
-3. Al 3D clicca successo.
-4. Torni su `/payment/status`. Vedi `done`.
-
-Ordine test vero:
-- Sandbox: `https://xpaysandbox.nexigroup.com/api/phoenix-0.0/psp/api/v1/orders/hpp`
-- Chiave test auto: `8372f58a-3e55-45f4-a71b-b08b810757ae`
-- Chiave test manuale: `9ceae112-ad7b-4051-96e3-bc02746bb068`
-
-## Produzione
-
-1. Da Nexi Business > Back Office XPay Web > Admin > APIKey crea chiave.
-2. Metti Ambiente Produzione + URL produzione + chiave vera.
-3. Prova con 1 € vero, poi rimborsa.
-
-## Marketplace Odoo
-
-- Carica su `apps.odoo.com/apps/upload` da repo Git.
-- Prezzo in EUR/USD. Fee 30%.
-- Niente review prima. Rimozione solo su abusi R1-R6.
-- Manca `icon.png` 1024x1024: aggiungi in `static/description/` prima di pubblicare.
-
-## Metodi di pagamento (da tabella Nexi)
-
-- Arrivano da soli dal repo: Carta, Google Pay, Apple Pay, Bancomat Pay, MyBank, PayPal, PayPal 3 rate.
-- Ognuno manda già il suo `paymentService`: `CARDS, GOOGLEPAY, APPLEPAY, BANCOMATPAY, MYBANK, PAYPAL, PAYPAL_BNPL`.
-- Se in provider metti `Metodo preselezionato`, quello vince su tutto.
-- Loghi già dentro in `static/src/img/`.
-
-## OneClick CIT (con spunta cliente)
-
-- Attiva `OneClick CIT` sul provider.
-- Il cliente loggato vede `Save my payment details` solo su `Carta`.
-- Con spunta: primo paga e crea contratto `CONTRACT_CREATION` tipo `CIT`.
-- Senza spunta: paga normale, niente contratto.
-- Carte salvate: in cassa vedi `Le tue carte salvate` (solo numeri mascherati, mai la carta vera). `Usa questa` seleziona Carta: su Nexi la ritrovi già pronta e riusa il contratto con `SUBSEQUENT_PAYMENT`.
-- Ospiti: niente spunta e niente lista (limite Odoo), quindi niente contratto.
-- Importo zero con OneClick = `VERIFY`, nessun addebito.
-- `AUTHORIZED` resta autorizzato, non diventa incassato.
-- Ultimo metodo usato già selezionato alla cassa successiva.
-
-## Metodi e disponibilità su Nexi
-
-- Bottone `Verifica metodi su Nexi` sul provider: prova ogni metodo sul tuo terminale e nasconde in cassa quelli rifiutati. Riesegui dopo averli attivati su Nexi.
-- Valori `paymentService` da tabella ufficiale Nexi.
-
-## Build v3 beta
-
-- Metti `Modalità` = Embedded Build v3.
-- Crea ordine `POST /orders/build` versione 3.
-- Mostra pagina interna `/payment/nexi/build/REF`.
-- Serve URL pubblico: localhost non va (limite Nexi).
-- Se errore, torna a Hosted Page.
-
-## Sicurezza
-
-- Chiave solo per admin sistema, mai in log.
-- URL solo `https` su domini Nexi.
-- Ref con regex, errori generici.
-- `cancel` in URL ignorato, vale solo verifica Nexi.
-- Timeout corto, messaggi utente generici.
+- PayPal Paga in 3 richiede un ordine di almeno 30 € (limite Nexi).
+- I campi carta della modalità Embedded sono iframe di Nexi: bordo, altezza e larghezza interni non sono personalizzabili.
+- La modalità Embedded richiede HTTPS e un dominio raggiungibile da Nexi.
 
 ## Struttura
 
-- `models/payment_provider.py`: credenziali, URL, chiamata Nexi.
-- `models/payment_transaction.py`: crea ordine, redirect, verifica.
-- `controllers/main.py`: ritorno `/payment/nexi/confirm`.
-- `views/`: form redirect + campi provider.
-- `tests/`: logica pura senza Odoo.
+```
+payment_nexi/
+├── __init__.py                     # hook di installazione
+├── __manifest__.py
+├── controllers/main.py             # ritorno Nexi + rotte Build
+├── data/payment_method_data.xml    # metodi di pagamento
+├── models/
+│   ├── payment_provider.py         # campi, chiamate API, URL
+│   ├── payment_method_nexi.py      # metodi visibili in cassa
+│   └── payment_transaction.py      # creazione ordine, esito, OneClick
+├── static/description/             # scheda e icona per il marketplace
+└── views/payment_nexi_templates.xml
+```
+
+## Licenza
+
+LGPL-3. Vedi [LICENSE](LICENSE).
