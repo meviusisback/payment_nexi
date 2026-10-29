@@ -315,21 +315,10 @@
               #nexi-inline{
                 background:#fff;border:1px solid #e5eaf3;border-radius:14px;
                 box-shadow:0 1px 2px rgba(16,24,40,.06),0 10px 24px rgba(16,24,40,.07);
-                padding:20px 18px 18px;margin:12px 0 4px;
+                padding:14px 18px 16px;margin:10px 0 4px;
               }
-              #nexi-inline .nexi-card-title{
-                font-size:22px;line-height:1.2;font-weight:800;color:#1d4ed8;margin:0 0 6px;
-              }
-              #nexi-inline .nexi-card-sub{font-size:14px;color:#6b7280;margin:0 0 16px}
-              #nexi-inline .nexi-card-brands{display:flex;gap:10px;margin:0 0 16px}
-              #nexi-inline .nexi-brand{
-                display:flex;align-items:center;justify-content:center;width:68px;height:42px;
-                border:1px solid #d7dde8;border-radius:8px;background:#fff;
-              }
-              #nexi-inline .nexi-brand.is-on{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.10)}
-              #nexi-inline .nexi-brand img{height:18px;width:auto;max-width:48px;object-fit:contain}
-              #nexi-inline-fields{display:grid;grid-template-columns:1fr 1fr;gap:14px 12px;margin:0 0 12px}
-              #nexi-inline .nexi-field{display:flex;flex-direction:column;gap:6px;grid-column:1 / -1}
+              #nexi-inline-fields{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px;margin:0 0 10px}
+              #nexi-inline .nexi-field{display:flex;flex-direction:column;gap:2px;grid-column:1 / -1}
               #nexi-inline .nexi-field[data-nexi-field="EXPIRATION_DATE"],
               #nexi-inline .nexi-field[data-nexi-field="SECURITY_CODE"]{grid-column:span 1}
               #nexi-inline .nexi-field label{font-size:13px;font-weight:600;color:#374151;margin:0}
@@ -346,13 +335,6 @@
               #nexi-inline-pay:disabled{background:#9db8f5}
             </style>
             <div id="nexi-inline" class="w-100 d-none">
-              <h3 class="nexi-card-title">Ultimo passo!</h3>
-              <p class="nexi-card-sub">Inserisci i dati della carta per completare l'acquisto.</p>
-              <div class="nexi-card-brands" aria-hidden="true">
-                <span class="nexi-brand is-on"><img src="/payment_nexi/static/src/img/mastercard.png" alt="Mastercard"/></span>
-                <span class="nexi-brand"><img src="/payment_nexi/static/src/img/visa.png" alt="Visa"/></span>
-                <span class="nexi-brand"><img src="/payment_nexi/static/src/img/amex.png" alt="American Express"/></span>
-              </div>
               <div id="nexi-inline-fields">
                 <p class="small text-muted">Carico i campi carta…</p>
               </div>
@@ -472,7 +454,7 @@
                       l.textContent = lab;
                       wrap.appendChild(l);
                     }
-                    wrap.appendChild(iframeFor(f, '60px'));
+                    wrap.appendChild(iframeFor(f, '46px'));
                     fb.appendChild(wrap);
                   });
                   if (fb.children.length) {
