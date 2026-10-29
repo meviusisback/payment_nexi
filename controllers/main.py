@@ -28,9 +28,10 @@ class NexiController(http.Controller):
         # Solo una volta: la notifica Nexi e il ritorno del browser arrivano insieme.
         if not tx.is_post_processed:
             tx._post_process()
-        # La pagina di stato rimanda a questa rotta: se manca, finisce su /payment/false.
-        if not tx.landing_route:
-            tx.landing_route = '/payment/status'
+        # Rotta finale: deve portare fuori dalla pagina di stato, altrimenti
+        # il polling la ricarica all'infinito (flickering).
+        if tx.landing_route != '/shop/payment/validate':
+            tx.landing_route = '/shop/payment/validate'
         if is_notify:
             return 'OK'
         # Dillo alla pagina di stato: senza questa chiave in sessione
@@ -101,6 +102,9 @@ class NexiController(http.Controller):
                 'partner_id': order.partner_invoice_id.id,
                 'reference': ref,
                 'operation': 'online_redirect',
+                # Rotta finale: porta alla conferma d'ordine. Se resta vuota o
+                # punta a /payment/status, la pagina di stato ricarica in loop.
+                'landing_route': '/shop/payment/validate',
                 'sale_order_ids': [(6, 0, [order.id])],
             })
         try:
