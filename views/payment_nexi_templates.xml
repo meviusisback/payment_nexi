@@ -424,6 +424,7 @@
                     if (!f || !f.src) return;
                     var wrap = document.createElement('div');
                     wrap.className = 'd-flex flex-column gap-1 mb-2';
+                    wrap.setAttribute('data-nexi-field', f.id || '');
                     var lab = LABELS[f.id];
                     if (lab) {
                       var l = document.createElement('label');
@@ -477,6 +478,13 @@
                           body: JSON.stringify({jsonrpc: '2.0', id: 1, params: {msg: 'onBuildError ' + txt}}),
                         });
                       } catch (e2) {}
+                      var info = d || {};
+                      if (info.id) {
+                        // Errore di un singolo campo mentre si scrive: lo mostro
+                        // sotto quel campo, senza bloccare tutto il pagamento.
+                        fieldError(info.id, info.errorMessage || 'Controlla questo campo.');
+                        return;
+                      }
                       fail('Errore Nexi. Riprova.');
                     },
                     onConfirmError: function () { fail('Dati non validi. Controlla e riprova.'); },
@@ -509,6 +517,21 @@
                     }
                   }, true);
                 }
+              }
+              function fieldError(fieldId, msg) {
+                var wrap = document.querySelector('[data-nexi-field="' + fieldId + '"]');
+                if (!wrap) return;
+                var hint = wrap.querySelector('.nexi-field-error');
+                if (!hint) {
+                  hint = document.createElement('small');
+                  hint.className = 'nexi-field-error text-danger d-block mt-1';
+                  wrap.appendChild(hint);
+                }
+                hint.textContent = msg;
+                var f = wrap.querySelector('iframe');
+                if (f) { f.style.borderColor = '#c02b2b'; }
+                clearTimeout(hint._h);
+                hint._h = setTimeout(function () { hint.textContent = ''; if (f) f.style.borderColor = ''; }, 8000);
               }
               function finalize(box) {
                 fetch(box.dataset.finalize, {

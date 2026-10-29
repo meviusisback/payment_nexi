@@ -241,7 +241,11 @@ class PaymentTransactionNexi(models.Model):
                 'amount': str(to_cents(self.amount)),
                 'currency': self.currency_id.name or 'EUR',
                 'description': (self.reference or '')[:100],
-                'customerId': 'C%010d' % (self.partner_id.id % 10000000000),
+                # In Build il customerId fa riapparire la carta salvata lato
+                # Nexi (campi bloccati e scadenza vecchia): lo mando solo se
+                # il cliente vuole davvero salvare la carta.
+                **({'customerId': 'C%010d' % (self.partner_id.id % 10000000000)}
+                   if (not is_build or want_save) else {}),
                 'customerInfo': {
                     'cardHolderName': (self.partner_id.name or '')[:255],
                     'cardHolderEmail': (self.partner_id.email or '')[:255],
