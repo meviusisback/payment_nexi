@@ -184,6 +184,16 @@ class PaymentTransactionNexi(models.Model):
         provider = self.provider_id
         if not provider.nexi_api_key:
             raise ValidationError(_('Manca la X-Api-Key Nexi nel provider.'))
+        # Paga in 3 ha un minimo di 30 € lato Nexi: dico il motivo prima di
+        # chiamare l'API, invece di far uscire un errore tecnico del gateway.
+        if (
+            (self.payment_method_code or '') == 'paypal_bnpl'
+            and self.amount
+            and self.amount < 30
+        ):
+            raise ValidationError(
+                _('PayPal Paga in 3 richiede almeno 30,00 € di ordine.')
+            )
         base = processing_values.get('base_url') or self.get_base_url()
         suffix = processing_values.get('order_suffix') or ''
         session = {

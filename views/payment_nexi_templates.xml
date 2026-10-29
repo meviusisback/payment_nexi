@@ -211,6 +211,52 @@
       <xpath expr="//t[@t-set='selected_method_id']" position="attributes">
         <attribute name="t-value">not selected_token_id and (request.env['payment.transaction'].sudo().get_last_used_method_id(partner_id, payment_methods_sudo.ids) or (len(payment_methods_sudo) == 1 and payment_methods_sudo[:1].id))</attribute>
       </xpath>
+      <xpath expr="//form[@id='o_payment_form']" position="inside">
+        <script type="text/javascript">
+        (function () {
+          var form = document.getElementById('o_payment_form');
+          if (!form || form.dataset.nexiBnpl) { return; }
+          form.dataset.nexiBnpl = '1';
+          function show(msg) {
+            var t = document.getElementById('nexi-bnpl-toast');
+            if (!t) {
+              t = document.createElement('div');
+              t.id = 'nexi-bnpl-toast';
+              t.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);' +
+                'background:#8b1b1b;color:#fff;padding:10px 16px;border-radius:8px;z-index:9999;' +
+                'font-size:14px;box-shadow:0 4px 14px rgba(0,0,0,.25)';
+              document.body.appendChild(t);
+            }
+            t.textContent = msg;
+            t.style.display = 'block';
+            clearTimeout(t._h);
+            t._h = setTimeout(function () { t.style.display = 'none'; }, 6000);
+          }
+          function tooSmall() {
+            var sel = form.querySelector('input[name="o_payment_radio"]:checked');
+            var code = sel ? (sel.dataset.paymentMethodCode || '') : '';
+            var amount = parseFloat(form.dataset.amount || '0') || 0;
+            return code === 'paypal_bnpl' &amp;&amp; amount &lt; 30;
+          }
+          var MSG = 'PayPal Paga in 3 richiede almeno 30,00 € di ordine.';
+          // Il "Pay now" sta fuori dal form e Odoo chiama form.submit():
+          // l'evento submit non passa, quindi guardo il click a livello pagina.
+          document.addEventListener('click', function (ev) {
+            var btn = ev.target &amp;&amp; ev.target.closest ? ev.target.closest('button[type="submit"]') : null;
+            if (!btn || !tooSmall()) { return; }
+            ev.preventDefault();
+            ev.stopImmediatePropagation();
+            show(MSG);
+          }, true);
+          form.addEventListener('submit', function (ev) {
+            if (!tooSmall()) { return; }
+            ev.preventDefault();
+            ev.stopPropagation();
+            show(MSG);
+          }, true);
+        })();
+        </script>
+      </xpath>
     </field>
   </record>
 
