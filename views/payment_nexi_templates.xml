@@ -295,10 +295,12 @@
               li[name=o_payment_option] div[for="o_payment_radio"]{
                 background:#eef0f3 !important;border-radius:8px;width:100% !important;max-width:none !important;
                 min-height:52px;display:flex !important;align-items:center;justify-content:center;
-                gap:10px;padding:8px 12px;margin:2px 0;
+                gap:10px;padding:10px 24px 10px 16px !important;margin:2px 0 !important;
               }
               li[name=o_payment_option]:hover div[for="o_payment_radio"]{background:#e6e9ee !important}
               li[name=o_payment_option]{cursor:pointer;align-items:flex-start !important}
+              /* Odoo stende la label su tutta la riga: coprirebbe i campi. */
+              li[name=o_payment_option] .o_payment_option_label::before{display:none !important}
               li[name=o_payment_option] .o_payment_option_label{font-weight:600;margin:0 !important}
               li[name=o_payment_option] p[name="o_payment_secured_by"]{display:none !important}
               li[name=o_payment_option] span.rounded.overflow-hidden{
@@ -318,6 +320,7 @@
                 <input type="checkbox" id="nexi-inline-privacy" class="form-check-input mt-1"/>
                 <small>Ho letto l'informativa privacy Nexi (<a href="https://www.nexi.it/privacy/xpay.html" target="_blank">nexi.it/privacy/xpay</a>).</small>
               </label>
+              <button type="button" id="nexi-inline-pay" class="btn btn-primary mt-2" style="display:none;">Pay now</button>
               <p id="nexi-inline-error" class="alert alert-danger mt-2 d-none"></p>
             </div>
             <script>
@@ -409,11 +412,31 @@
                   box.dataset.confirm = r.confirm_url;
                   var fb = document.getElementById('nexi-inline-fields');
                   fb.innerHTML = '';
+                  var LABELS = {
+                    CARD_NUMBER: 'Numero carta',
+                    EXPIRATION_DATE: 'Scadenza',
+                    SECURITY_CODE: 'Codice di sicurezza',
+                    CARDHOLDER_NAME: 'Nome e cognome',
+                    CARDHOLDER_SURNAME: 'Cognome',
+                    CARDHOLDER_EMAIL: 'Email',
+                  };
                   (r.fields || []).forEach(function (f) {
-                    if (f &amp;&amp; f.src) fb.appendChild(iframeFor(f, '60px'));
+                    if (!f || !f.src) return;
+                    var wrap = document.createElement('div');
+                    wrap.className = 'd-flex flex-column gap-1 mb-2';
+                    var lab = LABELS[f.id];
+                    if (lab) {
+                      var l = document.createElement('label');
+                      l.className = 'small text-600 mb-0';
+                      l.textContent = lab;
+                      wrap.appendChild(l);
+                    }
+                    wrap.appendChild(iframeFor(f, '60px'));
+                    fb.appendChild(wrap);
                   });
                   if (fb.children.length) {
                     document.getElementById('nexi-inline-privacy-wrap').classList.remove('d-none');
+                    document.getElementById('nexi-inline-pay').style.display = '';
                   } else {
                     done = false; fail('Nessun campo carta disponibile.'); return;
                   }
@@ -448,6 +471,17 @@
                     onConfirmError: function () { fail('Dati non validi. Controlla e riprova.'); },
                   });
                 } catch (e) { fail('SDK Nexi non caricato. Riprova.'); return; }
+                var payBtn = document.getElementById('nexi-inline-pay');
+                if (payBtn &amp;&amp; !payBtn.dataset.hook) {
+                  payBtn.dataset.hook = '1';
+                  payBtn.addEventListener('click', function (ev) {
+                    ev.preventDefault();
+                    if (!document.getElementById('nexi-inline-privacy').checked) {
+                      fail('Spunta la privacy per continuare.'); return;
+                    }
+                    if (window.__nexiBuild) { window.__nexiBuild.confirmData(function () {}); }
+                  });
+                }
                 var oForm = document.getElementById('o_payment_form');
                 if (oForm &amp;&amp; !oForm.dataset.nexiHook) {
                   oForm.dataset.nexiHook = '1';
@@ -480,27 +514,21 @@
               }
               document.addEventListener('click', function (ev) {
                 var t = ev.target;
-                if (t &amp;&amp; t.name === 'o_payment_radio' &amp;&amp; t.dataset &amp;&amp; t.dataset.paymentMethodCode === 'card') {
-                  var box = document.getElementById('nexi-inline');
-                  if (box) {
-                    box.classList.remove('d-none');
-                    if (!box.querySelector('iframe')) { done = false; }
-                  }
-                  prepare(true);
-                  return;
-                }
-                // Radio nascosto: clicco la riga Carta e apro/chiudo i campi.
-                var row = t &amp;&amp; t.closest ? t.closest('li[name=o_payment_option]') : null;
+                // Odoo manda due click (label + input): ne gestiamo uno solo.
+                if (!t || t.tagName === 'INPUT') return;
+                // Solo il bottone Carta apre/chiude: il resto della riga e i campi no.
+                var pill = t &amp;&amp; t.closest ? t.closest('div[for="o_payment_radio"]') : null;
+                if (!pill) return;
+                var row = pill.closest('li[name=o_payment_option]');
                 if (!row || !row.querySelector('#nexi-inline')) return;
-                if (t.closest('#nexi-inline')) return;
                 var b = document.getElementById('nexi-inline');
                 if (b &amp;&amp; !b.classList.contains('d-none')) { b.classList.add('d-none'); return; }
-                var r = row.querySelector('input[data-payment-method-code="card"]');
-                if (r) { try { r.checked = true; } catch (e) {} }
                 if (b) {
                   b.classList.remove('d-none');
                   if (!b.querySelector('iframe')) { done = false; }
                 }
+                var r = row.querySelector('input[data-payment-method-code="card"]');
+                if (r) { try { r.checked = true; } catch (e) {} }
                 prepare(true);
               });
               document.addEventListener('click', function (ev) {
@@ -526,17 +554,6 @@
                   delete apm.dataset.busy;
                   toast('Metodo non disponibile. Riprova.');
                 });
-              });
-              document.addEventListener('change', function (ev) {
-                var t = ev.target;
-                if (!t || t.name !== 'o_payment_radio') return;
-                if (!t.dataset || t.dataset.paymentMethodCode !== 'card') return;
-                var box = document.getElementById('nexi-inline');
-                if (box) {
-                  box.classList.remove('d-none');
-                  if (!box.querySelector('iframe')) { done = false; }
-                }
-                prepare(true);
               });
               // Carico in background ma NON apro: la carta si apre solo se la scegli.
               prepare(false);
