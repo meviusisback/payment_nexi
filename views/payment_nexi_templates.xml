@@ -19,7 +19,10 @@
         <link rel="stylesheet" href="/web/static/lib/bootstrap/css/bootstrap.min.css"/>
       </head>
       <body>
-      <div class="container mt-4 mb-5">
+      <div class="container mt-4 mb-5" id="nexi-build-box"
+           t-att-data-fields="build_state_url"
+           t-att-data-finalize="build_finalize_url"
+           t-att-data-confirm="confirm_url">
         <h3>Paga con Nexi</h3>
         <p class="text-muted">Paghi senza uscire dal sito. I dati carta restano su Nexi.</p>
         <div id="nexi-build-methods" class="d-flex flex-column gap-2 my-3">
@@ -37,10 +40,12 @@
         <p class="mt-3"><a href="/shop/payment">Torna alla cassa</a></p>
       </div>
       <script type="text/javascript" t-att-src="nexi_sdk"></script>
+      <div id="nexi-build-urls" class="d-none" t-att-data-finalize="build_finalize_url" t-att-data-confirm="confirm_url"></div>
       <script type="text/javascript">
         (function () {
-          var FINALIZE_URL = "<t t-esc="build_finalize_url"/>";
-          var CONFIRM_URL = "<t t-esc="confirm_url"/>";
+          var _u = document.getElementById('nexi-build-urls') || {};
+          var FINALIZE_URL = (_u.dataset || {}).finalize || '';
+          var CONFIRM_URL = (_u.dataset || {}).confirm || '';
           function fail(msg) {
             var e = document.getElementById('nexi-build-error');
             e.textContent = msg; e.classList.remove('d-none');
@@ -122,9 +127,11 @@
       <script type="text/javascript" t-att-src="nexi_sdk"></script>
       <script type="text/javascript">
         (function () {
-          var FIELDS_URL = "<t t-esc="build_state_url"/>";
-          var FINALIZE_URL = "<t t-esc="build_finalize_url"/>";
-          var CONFIRM_URL = "<t t-esc="confirm_url"/>";
+          var _b = document.getElementById('nexi-build-box') || {};
+          var _d = _b.dataset || {};
+          var FIELDS_URL = _d.fields || '';
+          var FINALIZE_URL = _d.finalize || '';
+          var CONFIRM_URL = _d.confirm || '';
           function fail(msg) {
             var e = document.getElementById('nexi-build-error');
             e.textContent = msg; e.classList.remove('d-none');
@@ -308,6 +315,7 @@
         <field name="nexi_oneclick"/>
         <field name="nexi_test_url" placeholder="URL test da developer.nexi.it/it/api/..."/>
         <field name="nexi_prod_url" placeholder="URL produzione da developer.nexi.it/it/api/..."/>
+        <field name="nexi_public_base" placeholder="Vuota = web.base.url, es. https://negozio.example.com"/>
         <button name="button_nexi_check_methods" string="Verifica metodi su Nexi" type="object" class="oe_highlight"/>
         <field name="nexi_methods_checked"/>
         <field name="nexi_methods_report"/>

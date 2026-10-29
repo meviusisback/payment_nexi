@@ -5,9 +5,8 @@ from odoo import api, SUPERUSER_ID
 
 
 def post_init_hook(env):
-    # Crea il provider Nexi se manca. Semplice: un record solo.
-    # Collega tutti i metodi del modulo, così si vedono subito.
-    # Mette i loghi del repo sui metodi, anche su installazioni già fatte.
+    # Crea il provider Nexi se manca. Non tocca mai le scelte dell'admin:
+    # aggiunge solo i metodi mancanti e le immagini vuote.
     import base64
     import os
     Provider = env['payment.provider'].sudo()
@@ -17,27 +16,27 @@ def post_init_hook(env):
         'visa', 'mastercard', 'amex',
     ]
     methods = Method.search([('code', 'in', codes)])
-    vals = {'payment_method_ids': [(6, 0, methods.ids)]} if methods else {}
     existing = Provider.search([('code', '=', 'nexi')])
     if not existing:
-        vals.update({
+        existing = Provider.create({
             'name': 'Nexi XPay Web',
             'code': 'nexi',
             'state': 'disabled',
             'is_published': False,
             'allow_tokenization': True,
+            'payment_method_ids': [(6, 0, methods.ids)] if methods else False,
         })
-        Provider.create(vals)
     else:
-        vals['allow_tokenization'] = True
-        existing.write(vals)
+        have = set(existing.payment_method_ids.ids)
+        missing = [m.id for m in methods if m.id not in have]
+        if missing:
+            existing.write({'payment_method_ids': [(4, i) for i in missing]})
     base = os.path.join(os.path.dirname(__file__), 'static', 'src', 'img')
     for code in codes:
         path = os.path.join(base, code + '.png')
         if not os.path.isfile(path):
             continue
         method = Method.search([('code', '=', code)], limit=1)
-        if not method:
-            continue
-        with open(path, 'rb') as f:
-            method.write({'image': base64.b64encode(f.read())})
+        if method and not method.image:
+            with open(path, 'rb') as f:
+                method.write({'image': base64.b64encode(f.read())})

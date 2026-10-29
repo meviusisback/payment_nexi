@@ -58,6 +58,13 @@ class PaymentProviderNexi(models.Model):
         string='Metodo preselezionato',
         help='Passato come paymentService a Nexi. Vuoto = tutti i metodi. Valori da tabella codifica PaymentService (es. GOOGLEPAY). Solo maiuscole, cifre, underscore.',
     )
+    # Base pubblica del negozio (https://...). Usata per resultUrl e merchantUrl.
+    # Se vuota, usa web.base.url. Non si usa mai l'header Host della richiesta.
+    nexi_public_base = fields.Char(
+        string='Base pubblica negozio',
+        help='Es. https://negozio.example.com. Se vuota, usa web.base.url.',
+        groups='base.group_system',
+    )
     # OneClick CIT: salva carta con contratto e riusala dopo.
     nexi_oneclick = fields.Boolean(
         string='OneClick CIT',
@@ -117,7 +124,7 @@ class PaymentProviderNexi(models.Model):
             except ValidationError:
                 ok = False
                 detail = 'rifiutato dal terminale'
-            method.sudo().nexi_disabled = not ok
+            method.nexi_disabled = not ok
             lines.append('%s (%s): %s' % (method.name, service, detail))
         self.nexi_methods_report = '\n'.join(lines)
         from odoo import fields as odoo_fields
@@ -187,7 +194,11 @@ class PaymentProviderNexi(models.Model):
             'Correlation-Id': str(uuid.uuid4()),
         }
         try:
-            resp = requests.request(method, url, json=payload, params=params, headers=headers, timeout=(5, 15))
+            # Niente redirect: la chiave non deve mai viaggiare su un altro host.
+            resp = requests.request(method, url, json=payload, params=params, headers=headers, timeout=(5, 15), allow_redirects=False)
+            if 300 <= (resp.status_code or 0) < 400:
+                _logger.warning('Nexi redirect inatteso %s -> %s', url, resp.headers.get('Location'))
+                raise ValidationError(_('Nexi risposta non valida. Riprova.'))
             try:
                 resp.raise_for_status()
             except requests.exceptions.HTTPError:

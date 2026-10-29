@@ -52,6 +52,7 @@ I metodi non abilitati sul terminale si nascondono con il pulsante
 | Ambiente | Test o Produzione |
 | URL Nexi (test/produzione) | Endpoint `…/psp/api/v1/orders/hpp` |
 | Modalità | **Hosted Page** o **Embedded (Build v3)** |
+| Base pubblica negozio | Vuota = `web.base.url`. Metti il dominio pubblico (serve per i ritorni e per Build) |
 | Metodo preselezionato | Vuoto = tutti, oppure es. `GOOGLEPAY` |
 | OneClick | Crea e riusa un contratto per le carte salvate (Hosted Page) |
 | Verifica metodi su Nexi | Nasconde in cassa i metodi non attivi sul terminale |
@@ -90,6 +91,22 @@ payment_nexi/
 ├── static/description/             # scheda e icona per il marketplace
 └── views/payment_nexi_templates.xml
 ```
+
+## Sicurezza
+
+- Ogni transazione ha un codice casuale (`tok`): senza codice giusto le rotte
+  rispondono "non trovato" senza toccare Nexi né il pagamento.
+- L'ordine da verificare lo decide la transazione, mai chi chiama; la risposta
+  di Nexi deve parlare dello stesso ordine, e l'importo è confrontato in
+  centesimi (stessa unità da entrambi i lati).
+- I dati Nexi (`contractId`, sessioni, PAN mascherato) li scrive solo il sistema:
+  scritture esterne via RPC sono rifiutate.
+- Le carte salvate le vede solo il loro proprietario; i contratti sono casuali,
+  non derivati da ID.
+- Limiti di frequenza sulle rotte pubbliche; niente redirect con la chiave API;
+  `Base pubblica negozio` (o `web.base.url`) per resultUrl e merchantUrl, mai
+  l'header Host.
+- Solo messaggi generici al browser; dettagli nei log del server.
 
 ## Licenza
 

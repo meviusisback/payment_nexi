@@ -5,7 +5,7 @@ import re
 from decimal import Decimal, InvalidOperation
 
 from odoo import _, api, fields, models
-from odoo.exceptions import ValidationError
+from odoo.exceptions import AccessError, ValidationError
 
 _logger = logging.getLogger(__name__)
 
@@ -55,6 +55,23 @@ def _parse_amount(value):
         return Decimal('0')
 
 
+def _parse_cents(value):
+    """Centesimi interi da risposta Nexi. O numero intero, o niente."""
+    try:
+        d = Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+    if d != d.to_integral_value():
+        return None
+    return int(d)
+
+
+def _nexi_new_contract_id():
+    """contractId imprevedibile: N + 16 cifre esadecimali."""
+    import secrets as _secrets
+    return 'N' + _secrets.token_hex(8).upper()
+
+
 class PaymentTransactionNexi(models.Model):
     _inherit = 'payment.transaction'
 
@@ -69,6 +86,8 @@ class PaymentTransactionNexi(models.Model):
     )
     nexi_build_session = fields.Char(string='Sessione Build', readonly=True)
     nexi_build_token = fields.Char(string='Token Build', readonly=True)
+    # Codice casuale per transazione: chi non ce l'ha non tocca il pagamento.
+    nexi_access_token = fields.Char(string='Codice accesso Nexi', readonly=True)
 
     def _nexi_family_ids(self, partner_id):
         """Partner + contatti collegati: il contratto vale per tutta la famiglia."""
@@ -93,9 +112,21 @@ class PaymentTransactionNexi(models.Model):
         ], order='id desc', limit=1)
         return tx.nexi_contract_id or False
 
+    def _nexi_can_see_partner(self, partner_id):
+        """Vedo solo le mie carte, a meno che sia il sistema."""
+        if self.env.su or self.env.user.has_group('base.group_system'):
+            return True
+        try:
+            mine = set(self._nexi_family_ids(self.env.user.partner_id.id))
+        except Exception:
+            return False
+        return partner_id in mine
+
     @api.model
     def get_nexi_saved_cards(self, partner_id):
         """Carte salvate del cliente (solo numeri mascherati). Per la cassa."""
+        if not self._nexi_can_see_partner(partner_id):
+            return []
         family = self._nexi_family_ids(partner_id)
         if not family:
             return []
@@ -120,6 +151,8 @@ class PaymentTransactionNexi(models.Model):
     @api.model
     def get_last_used_method_id(self, partner_id, method_ids):
         """Ultimo metodo usato dal cliente, se ancora disponibile. Per preselezione."""
+        if not self._nexi_can_see_partner(partner_id):
+            return False
         family = self._nexi_family_ids(partner_id)
         if not family or not method_ids:
             return False
@@ -129,6 +162,28 @@ class PaymentTransactionNexi(models.Model):
             ('state', 'in', ['done', 'authorized', 'pending', 'draft']),
         ], order='id desc', limit=1)
         return tx.payment_method_id.id if tx else False
+
+    @api.model
+    def create(self, vals):
+        vals = dict(vals or {})
+        if not self.env.su and not self.env.user.has_group('base.group_system'):
+            # Il cliente non sceglie token ne' contratti: li fa solo il sistema.
+            for f in ('nexi_contract_id', 'nexi_build_session', 'nexi_build_token',
+                      'nexi_masked_pan', 'nexi_order_id', 'nexi_access_token'):
+                vals.pop(f, None)
+        if not vals.get('nexi_access_token'):
+            import secrets as _secrets
+            vals['nexi_access_token'] = _secrets.token_urlsafe(32)
+        return super().create(vals)
+
+    def write(self, vals):
+        if not self.env.su and not self.env.user.has_group('base.group_system'):
+            bad = [f for f in ('nexi_contract_id', 'nexi_build_session', 'nexi_build_token',
+                               'nexi_masked_pan', 'nexi_order_id', 'nexi_access_token')
+                   if f in (vals or {})]
+            if bad:
+                raise AccessError(_('Solo il sistema puo scrivere i dati Nexi.'))
+        return super().write(vals)
 
     def _get_specific_create_values(self, provider_code, values):
         vals = super()._get_specific_create_values(provider_code, values)
@@ -143,23 +198,18 @@ class PaymentTransactionNexi(models.Model):
         except ValidationError as e:
             session = (payload or {}).get('paymentSession') or {}
             rec = session.get('recurrence') or {}
-            if 'contract' not in str(e).lower() or rec.get('action') != 'SUBSEQUENT_PAYMENT':
+            msg = str(e)
+            dead_code = 'PS0064' in msg or 'Recurring contract does not exist' in msg
+            if not dead_code or rec.get('action') != 'SUBSEQUENT_PAYMENT':
                 raise
             dead = rec.get('contractId')
             _logger.warning('Nexi contratto morto %s, riprovo senza.', dead)
-            if dead:
-                self.search([
-                    ('provider_code', '=', 'nexi'),
-                    ('partner_id', 'in', self._nexi_family_ids(self.partner_id.id)),
-                    ('nexi_contract_id', '=', dead),
-                ]).write({'nexi_contract_id': False})
-                if self.nexi_contract_id == dead:
-                    self.nexi_contract_id = False
+            if dead and self.nexi_contract_id == dead:
+                self.sudo().nexi_contract_id = False
             session = dict(session)
             session.pop('recurrence', None)
             if want_save:
-                contract = 'N%06d%011d' % (
-                    self.partner_id.id % 1000000, self.id % 100000000000)
+                contract = _nexi_new_contract_id()
                 session['recurrence'] = {
                     'action': 'CONTRACT_CREATION',
                     'contractId': contract,
@@ -194,16 +244,47 @@ class PaymentTransactionNexi(models.Model):
             raise ValidationError(
                 _('PayPal Paga in 3 richiede almeno 30,00 € di ordine.')
             )
-        base = processing_values.get('base_url') or self.get_base_url()
+        # Base pubblica: campo dedicato, poi web.base.url. L'Host della
+        # richiesta vale solo come ultima spiaggia (tunnel di prova): in
+        # produzione imposta sempre la base esplicita.
+        base = (provider.nexi_public_base or '').strip().rstrip('/')
+        if not base:
+            from urllib.parse import urlparse as _up
+            wbu = (self.get_base_url() or '').rstrip('/')
+            try:
+                _whost = (_up(wbu).hostname or '').lower()
+                _wok = _up(wbu).scheme == 'https' and _whost not in ('', 'localhost', '127.0.0.1')
+            except Exception:
+                _wok = False
+            if _wok:
+                base = wbu
+        if not base:
+            from urllib.parse import urlparse as _up2
+            cand = (processing_values.get('base_url') or '').rstrip('/')
+            try:
+                _chost = (_up2(cand).hostname or '').lower()
+                _cok = _up2(cand).scheme == 'https' and _chost not in ('', 'localhost', '127.0.0.1')
+            except Exception:
+                _cok = False
+            if _cok:
+                _logger.warning('Nexi usa Host della richiesta: imposta Base pubblica negozio.')
+                base = cand
+        if not base:
+            base = self.get_base_url()
         suffix = processing_values.get('order_suffix') or ''
+        if not self.nexi_access_token:
+            import secrets as _secrets
+            self.sudo().nexi_access_token = _secrets.token_urlsafe(32)
+        tok = self.nexi_access_token
         session = {
             'actionType': 'VERIFY' if (provider.nexi_oneclick and not self.amount) else 'PAY',
             'amount': str(to_cents(self.amount)),
             'language': 'ITA',
-            'resultUrl': f'{base}/payment/nexi/confirm?ref={self.reference}{suffix}',
-            'cancelUrl': f'{base}/payment/nexi/confirm?ref={self.reference}{suffix}&cancel=1',
-            'notificationUrl': f'{base}/payment/nexi/confirm?ref={self.reference}{suffix}&notify=1',
-            'captureType': 'EXPLICIT' if provider.nexi_capture == 'explicit' else 'IMPLICIT',
+            'resultUrl': f'{base}/payment/nexi/confirm?ref={self.reference}{suffix}&tok={tok}',
+            'cancelUrl': f'{base}/payment/nexi/confirm?ref={self.reference}{suffix}&cancel=1&tok={tok}',
+            'notificationUrl': f'{base}/payment/nexi/confirm?ref={self.reference}{suffix}&notify=1&tok={tok}',
+            # Sempre automatico: la cattura manuale rompeva i pagamenti (500).
+            'captureType': 'IMPLICIT',
         }
         # Preselezione metodo: campo provider vince, se vuoto usa metodo scelto.
         # no_service (prepare condiviso): niente filtro, Nexi ridà tutti i bottoni.
@@ -240,7 +321,7 @@ class PaymentTransactionNexi(models.Model):
                     'contractType': 'CIT',
                 }
             elif want_save:
-                contract = 'N%06d%011d' % (self.partner_id.id % 1000000, self.id % 100000000000)
+                contract = _nexi_new_contract_id()
                 session['recurrence'] = {
                     'action': 'CONTRACT_CREATION',
                     'contractId': contract,
@@ -270,6 +351,7 @@ class PaymentTransactionNexi(models.Model):
         if provider.nexi_mode == 'build' and (
             (self.payment_method_code or '') == 'card' or processing_values.get('force_build')
         ):
+            processing_values = dict(processing_values or {}, base_url=base)
             return self._nexi_render_build_values(res, provider, payload, want_save, processing_values)
         url = provider._nexi_base_url()
         try:
@@ -308,7 +390,7 @@ class PaymentTransactionNexi(models.Model):
         processing_values = processing_values or {}
         base = processing_values.get('base_url') or self.get_base_url()
         if 'localhost' in (base or '') or '127.0.0.1' in (base or ''):
-            raise ValidationError(_('Build vuole URL pubblico, localhost non va. Usa HPP per i test locali.'))
+            raise ValidationError(_('Build vuole URL pubblico (Base pubblica negozio o web.base.url), localhost non va. Usa HPP per i test locali.'))
         build_url = provider._nexi_build_url()
         build_payload = dict(payload)
         build_payload['version'] = '3'
@@ -373,11 +455,16 @@ class PaymentTransactionNexi(models.Model):
         # Non fidarti di cancel in URL: verifica sempre su Nexi.
         provider = self.provider_id
         create_url = provider._nexi_base_url()
-        order_ref = (notification_data or {}).get('nexi_order_ref') or self.reference
+        # L'ordine da controllare lo decide la transazione, mai chi chiama.
+        raw_ref = (notification_data or {}).get('nexi_order_ref')
+        if raw_ref and raw_ref != self.reference and raw_ref != self.reference + '-m':
+            self._set_error('Ritorno Nexi non valido.')
+            return
+        order_ref = raw_ref or self.reference
+        from urllib.parse import quote
         if '/orders/hpp' in create_url:
-            verify_url = create_url.replace('/orders/hpp', f'/orders/{order_ref}')
+            verify_url = create_url.replace('/orders/hpp', f'/orders/{quote(order_ref, safe="")}')
         else:
-            from urllib.parse import quote
             verify_url = create_url.rstrip('/') + f'/orders/{quote(order_ref, safe="")}'
         import time as _time
         data = {}
@@ -386,9 +473,16 @@ class PaymentTransactionNexi(models.Model):
             try:
                 data = provider._nexi_make_request('GET', verify_url)
             except ValidationError as e:
-                self._set_error(str(e))
+                _logger.warning('Nexi verifica %s KO: %s', self.reference, str(e)[:200])
+                self._set_error('Nexi non raggiungibile. Riprova.')
                 return
             auth_op = self._nexi_last_auth(data)
+            got_order = (data.get('orderId')
+                         or (data.get('orderStatus') or {}).get('order', {}).get('orderId')
+                         or '')
+            if got_order and got_order != order_ref:
+                self._set_error('Ritorno Nexi non valido.')
+                return
             result = (auth_op or {}).get('operationResult') or ''
             # Il circuito a volte risponde PENDING per qualche secondo:
             # riprovo invece di dichiarare subito "in attesa".
@@ -397,15 +491,12 @@ class PaymentTransactionNexi(models.Model):
             if attempt < 5:
                 _time.sleep(1.5)
         if is_paid(result):
-            # Controlla importo e valuta prima di chiudere.
-            expected = _parse_amount(self.amount)
-            got = Decimal('0')
+            # Controlla importo e valuta prima di chiudere: tutto in centesimi.
+            expected = to_cents(self.amount)
             cur_ok = True
             masked = False
             op = auth_op or {}
-            got = _parse_amount(op.get('operationAmount', '0'))
-            if op.get('operationCurrency') and op.get('operationCurrency') != self.currency_id.name:
-                cur_ok = False
+            got = _parse_cents(op.get('operationAmount'))
             masked = (
                 op.get('paymentInstrumentInfo')
                 or op.get('maskedPan')
@@ -413,11 +504,11 @@ class PaymentTransactionNexi(models.Model):
                 or False
             )
             status = (data or {}).get('orderStatus', {}) or {}
-            if not cur_ok or got < expected:
+            if not cur_ok or got is None or got < expected:
                 self._set_error('Nexi importo non valido.')
                 return
-            cap = _parse_amount(status.get('capturedAmount', '0'))
-            if cap < expected:
+            cap = _parse_cents(status.get('capturedAmount', '0'))
+            if cap is None or cap < expected:
                 self._set_error('Nexi incasso non completo.')
                 return
             if masked:
@@ -434,7 +525,8 @@ class PaymentTransactionNexi(models.Model):
                     if masked_auth:
                         self.nexi_masked_pan = _nexi_short(masked_auth)
                     break
-            self._set_authorized(state_message=f'Nexi autorizzato: {result}')
+            # Niente cattura manuale: resta in attesa invece di andare in errore.
+            self._set_pending(state_message=f'Nexi autorizzato: {result}')
         elif result in KO_RESULTS:
             self._set_canceled(state_message=f'Nexi KO: {result}')
         else:
