@@ -192,6 +192,7 @@ class PaymentTransactionNexi(models.Model):
             'language': 'ITA',
             'resultUrl': f'{base}/payment/nexi/confirm?ref={self.reference}{suffix}',
             'cancelUrl': f'{base}/payment/nexi/confirm?ref={self.reference}{suffix}&cancel=1',
+            'notificationUrl': f'{base}/payment/nexi/confirm?ref={self.reference}{suffix}&notify=1',
             'captureType': 'EXPLICIT' if provider.nexi_capture == 'explicit' else 'IMPLICIT',
         }
         # Preselezione metodo: campo provider vince, se vuoto usa metodo scelto.
@@ -346,6 +347,15 @@ class PaymentTransactionNexi(models.Model):
             raise ValidationError(_('Ritorno Nexi non valido.'))
         return tx
 
+    @api.model
+    def _nexi_last_auth(self, data):
+        """L'ordine puo' avere piu' tentativi: conta solo l'ultimo."""
+        ops = [o for o in ((data or {}).get('operations') or [])
+               if o.get('operationType') == 'AUTHORIZATION']
+        if not ops:
+            return {}
+        return max(ops, key=lambda o: str(o.get('operationTime') or ''))
+
     def _process_notification_data(self, notification_data):
         super()._process_notification_data(notification_data)
         if self.provider_code != 'nexi':
@@ -359,34 +369,39 @@ class PaymentTransactionNexi(models.Model):
         else:
             from urllib.parse import quote
             verify_url = create_url.rstrip('/') + f'/orders/{quote(order_ref, safe="")}'
-        try:
-            data = provider._nexi_make_request('GET', verify_url)
-        except ValidationError as e:
-            self._set_error(str(e))
-            return
+        import time as _time
+        data = {}
         result = ''
-        for op in (data or {}).get('operations', []):
-            if op.get('operationType') == 'AUTHORIZATION':
-                result = op.get('operationResult') or ''
+        for attempt in range(6):
+            try:
+                data = provider._nexi_make_request('GET', verify_url)
+            except ValidationError as e:
+                self._set_error(str(e))
+                return
+            auth_op = self._nexi_last_auth(data)
+            result = (auth_op or {}).get('operationResult') or ''
+            # Il circuito a volte risponde PENDING per qualche secondo:
+            # riprovo invece di dichiarare subito "in attesa".
+            if result and result.upper() not in ('PENDING', 'AUTH-REQUEST', 'AUTHORIZED_PENDING'):
                 break
+            if attempt < 5:
+                _time.sleep(1.5)
         if is_paid(result):
             # Controlla importo e valuta prima di chiudere.
             expected = _parse_amount(self.amount)
             got = Decimal('0')
             cur_ok = True
             masked = False
-            for op in (data or {}).get('operations', []):
-                if op.get('operationType') == 'AUTHORIZATION':
-                    got = _parse_amount(op.get('operationAmount', '0'))
-                    if op.get('operationCurrency') and op.get('operationCurrency') != self.currency_id.name:
-                        cur_ok = False
-                    masked = (
-                        op.get('paymentInstrumentInfo')
-                        or op.get('maskedPan')
-                        or op.get('maskedPanAlias')
-                        or False
-                    )
-                    break
+            op = auth_op or {}
+            got = _parse_amount(op.get('operationAmount', '0'))
+            if op.get('operationCurrency') and op.get('operationCurrency') != self.currency_id.name:
+                cur_ok = False
+            masked = (
+                op.get('paymentInstrumentInfo')
+                or op.get('maskedPan')
+                or op.get('maskedPanAlias')
+                or False
+            )
             status = (data or {}).get('orderStatus', {}) or {}
             if not cur_ok or got < expected:
                 self._set_error('Nexi importo non valido.')

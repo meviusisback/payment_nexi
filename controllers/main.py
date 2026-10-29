@@ -7,13 +7,36 @@ from odoo.http import request
 
 
 class NexiController(http.Controller):
-    @http.route('/payment/nexi/confirm', type='http', auth='public', csrf=False, methods=['GET'])
+    @http.route('/payment/nexi/confirm', type='http', auth='public', csrf=False, methods=['GET', 'POST'])
     def nexi_confirm(self, **kw):
         # kw = parametri che Nexi aggiunge al ritorno (ref, cancel, ...).
+        is_notify = request.httprequest.method == 'POST'
+        if is_notify and not kw.get('ref'):
+            # La notifica arriva come JSON, non come query string.
+            try:
+                body = json.loads(request.httprequest.get_data() or '{}')
+            except Exception:
+                body = {}
+            order = body.get('orderId') or (body.get('order') or {}).get('orderId')
+            if order:
+                kw['ref'] = order
         tx = request.env['payment.transaction'].sudo()._get_tx_from_notification_data(
             'nexi', kw
         )
         tx._process_notification_data(kw)
+        # Senza questo Odoo non conferma l'ordine ne' crea la fattura.
+        # Solo una volta: la notifica Nexi e il ritorno del browser arrivano insieme.
+        if not tx.is_post_processed:
+            tx._post_process()
+        # La pagina di stato rimanda a questa rotta: se manca, finisce su /payment/false.
+        if not tx.landing_route:
+            tx.landing_route = '/payment/status'
+        if is_notify:
+            return 'OK'
+        # Dillo alla pagina di stato: senza questa chiave in sessione
+        # Odoo non trova il pagamento e mostra "in attesa".
+        from odoo.addons.payment.controllers.post_processing import PaymentPostProcessing
+        PaymentPostProcessing.monitor_transaction(tx)
         return request.redirect('/payment/status')
 
     @http.route('/payment/nexi/build/<string:reference>', type='http', auth='public', website=True, methods=['GET'])
