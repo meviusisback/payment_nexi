@@ -81,6 +81,22 @@ class NexiController(http.Controller):
                 'sale_order_ids': [(6, 0, [order.id])],
             })
         try:
+            if method_code and method_code != 'card':
+                # APM: Nexi ridà subito l'URL della sua pagina di pagamento.
+                res_apm = tx._get_specific_rendering_values(dict({
+                    'amount': tx.amount,
+                    'currency_id': tx.currency_id.id,
+                    'partner_id': tx.partner_id.id,
+                    'reference': tx.reference,
+                    'should_tokenize': False,
+                    'force_build': True,
+                }, **extra))
+                return {
+                    'tx': tx.reference,
+                    'url': res_apm.get('build_url') or False,
+                    'fields': [],
+                    'buttons': [],
+                }
             res_cards = tx._get_specific_rendering_values(dict({
                 'amount': tx.amount,
                 'currency_id': tx.currency_id.id,

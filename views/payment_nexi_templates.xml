@@ -290,18 +290,17 @@
         <t t-if="nexi_prov and nexi_prov.nexi_mode == 'build'">
           <t t-if="pm_sudo.code == 'card'">
             <style>
-              li[name=o_payment_option]:has(.nexi-apm-inline) div[for="o_payment_radio"]{display:none !important}
-              li[name=o_payment_option]:has(.nexi-apm-inline) p[name="o_payment_secured_by"]{display:none !important}
-              li[name=o_payment_option]:has(.nexi-apm-inline) span.rounded.overflow-hidden{display:none !important}
-              li[name=o_payment_option]:has(#nexi-inline) input[type="radio"]{display:none !important}
-              li[name=o_payment_option]:has(#nexi-inline) div[for="o_payment_radio"]{
+              /* Build: ogni riga è una pillola grigia con logo + nome, senza radio. */
+              li[name=o_payment_option] input[type="radio"]{display:none !important}
+              li[name=o_payment_option] div[for="o_payment_radio"]{
                 background:#eef0f3 !important;border-radius:8px;width:260px;max-width:100%;
                 min-height:52px;display:flex !important;align-items:center;justify-content:center;
                 gap:10px;padding:8px 12px;margin:2px 0;
               }
-              li[name=o_payment_option]:has(#nexi-inline):hover div[for="o_payment_radio"]{background:#e6e9ee !important}
-              li[name=o_payment_option]:has(#nexi-inline){cursor:pointer;align-items:flex-start !important}
-              li[name=o_payment_option]:has(#nexi-inline) .o_payment_option_label{font-weight:600;margin:0 !important}
+              li[name=o_payment_option]:hover div[for="o_payment_radio"]{background:#e6e9ee !important}
+              li[name=o_payment_option]{cursor:pointer;align-items:flex-start !important}
+              li[name=o_payment_option] .o_payment_option_label{font-weight:600;margin:0 !important}
+              li[name=o_payment_option] p[name="o_payment_secured_by"]{display:none !important}
               li[name=o_payment_option] span.rounded.overflow-hidden{
                 width:auto !important;height:18px !important;min-width:0;background:transparent !important;
                 box-shadow:none !important;overflow:visible !important;border-radius:3px;
@@ -310,8 +309,6 @@
                 height:18px !important;width:auto !important;max-width:36px;object-fit:contain;
                 min-height:0 !important;display:block;
               }
-              .nexi-apm-inline{padding:4px 0}
-              .nexi-apm-frame iframe{display:block !important;width:260px !important;max-width:100% !important;height:52px !important;border:0 !important;border-radius:8px;overflow:hidden}
             </style>
             <div id="nexi-inline" class="w-100 d-none">
               <div id="nexi-inline-fields" class="d-flex flex-column gap-2 my-2">
@@ -388,14 +385,13 @@
                 fetch('/payment/nexi/build/prepare', {
                   method: 'POST',
                   headers: {'Content-Type': 'application/json'},
-                  body: JSON.stringify({}),
+                  body: JSON.stringify({jsonrpc: '2.0', id: 1, params: {}}),
                 }).then(function (r) { return r.json(); }
                 ).then(function (res) {
                   var r = (res &amp;&amp; res.result) || res || {};
                   if (r.error) { done = false; fail(r.error || 'Form non caricato. Riprova.'); return; }
                   box.dataset.finalize = r.finalize_url;
                   box.dataset.confirm = r.confirm_url;
-                  distribute(r.buttons || []);
                   var fb = document.getElementById('nexi-inline-fields');
                   fb.innerHTML = '';
                   (r.fields || []).forEach(function (f) {
@@ -406,27 +402,23 @@
                   } else {
                     done = false; fail('Nessun campo carta disponibile.'); return;
                   }
+                  hideUnavailable(r.buttons);
                   loadSdk(r.sdk, initBuild);
                 }).catch(function () { done = false; fail('Form non caricato. Riprova.'); });
               }
               var BTNMAP = {googlepay: 'GOOGLEPAY', applepay: 'APPLEPAY', bancomatpay: 'BANCOMATPAY', mybank: 'MYBANK', paypal: 'PAYPAL', paypal_bnpl: 'PAYPAL_PAGAIN3'};
-              function distribute(buttons) {
-                var byId = {};
-                (buttons || []).forEach(function (f) { if (f &amp;&amp; f.id) byId[f.id] = f; });
-                document.querySelectorAll('.nexi-apm-inline').forEach(function (wrap) {
-                  var f = byId[BTNMAP[wrap.dataset.methodCode] || ''];
-                  var frame = wrap.querySelector('.nexi-apm-frame');
-                  if (f &amp;&amp; f.src &amp;&amp; frame) {
-                    frame.innerHTML = '';
-                    frame.appendChild(iframeFor(f, '70px'));
-                    wrap.classList.remove('d-none');
-                  } else if (frame) {
-                    var li = wrap.closest('li[name=o_payment_option]');
-                    if (li) li.style.display = 'none';
-                  }
+              // Nascondo le righe il cui metodo Nexi non offre davvero.
+              function hideUnavailable(buttons) {
+                var ids = {};
+                (buttons || []).forEach(function (f) { if (f &amp;&amp; f.id) ids[f.id] = 1; });
+                document.querySelectorAll('.nexi-apm-row').forEach(function (mark) {
+                  var svc = BTNMAP[mark.dataset.methodCode] || '';
+                  var li = mark.closest('li[name=o_payment_option]');
+                  if (!li) return;
+                  if (svc &amp;&amp; !ids[svc]) li.style.display = 'none';
                 });
               }
-                function initBuild() {
+              function initBuild() {
                 try {
                   window.__nexiBuild = new Build({
                     onBuildFlowStateChange: function (evtData, workflowState) {
@@ -493,28 +485,45 @@
                   b.classList.remove('d-none');
                   if (!b.querySelector('iframe')) { done = false; }
                 }
-                document.querySelectorAll('.nexi-apm-inline').forEach(function (x) { x.classList.add('d-none'); });
                 prepare(true);
+              });
+              document.addEventListener('click', function (ev) {
+                var t = ev.target;
+                var row = t &amp;&amp; t.closest ? t.closest('li[name=o_payment_option]') : null;
+                if (!row) return;
+                var apm = row.querySelector('.nexi-apm-row');
+                if (!apm || apm.dataset.busy) return;
+                apm.dataset.busy = '1';
+                var code = apm.dataset.methodCode;
+                var btn = row.querySelector('div[for="o_payment_radio"]');
+                if (btn) { btn.style.opacity = '0.6'; }
+                fetch('/payment/nexi/build/prepare', {
+                  method: 'POST',
+                  headers: {'Content-Type': 'application/json'},
+                  body: JSON.stringify({jsonrpc: '2.0', id: 1, params: {method_code: code}}),
+                }).then(function (r) { return r.json(); }
+                ).then(function (res) {
+                  var r = (res &amp;&amp; res.result) || res || {};
+                  if (r.url) { window.location.href = r.url; return; }
+                  delete apm.dataset.busy;
+                  if (btn) { btn.style.opacity = ''; }
+                  fail('Metodo non disponibile: ' + (r.error || 'riprova.'));
+                }).catch(function () {
+                  delete apm.dataset.busy;
+                  if (btn) { btn.style.opacity = ''; }
+                  fail('Metodo non disponibile. Riprova.');
+                });
               });
               document.addEventListener('change', function (ev) {
                 var t = ev.target;
                 if (!t || t.name !== 'o_payment_radio') return;
-                var isCard = t.dataset &amp;&amp; t.dataset.paymentMethodCode === 'card';
+                if (!t.dataset || t.dataset.paymentMethodCode !== 'card') return;
                 var box = document.getElementById('nexi-inline');
-                document.querySelectorAll('.nexi-apm-inline').forEach(function (x) { x.classList.add('d-none'); });
-                if (isCard) {
-                  if (box) {
-                    box.classList.remove('d-none');
-                    if (!box.querySelector('iframe')) { done = false; }
-                  }
-                  prepare(true);
-                } else {
-                  if (box) box.classList.add('d-none');
-                  var li = t.closest('li[name=o_payment_option]');
-                  var ap = li ? li.querySelector('.nexi-apm-inline') : null;
-                  if (ap) { ap.classList.remove('d-none'); }
-                  prepare(false);
+                if (box) {
+                  box.classList.remove('d-none');
+                  if (!box.querySelector('iframe')) { done = false; }
                 }
+                prepare(true);
               });
               // Carico in background ma NON apro: la carta si apre solo se la scegli.
               prepare(false);
@@ -529,10 +538,7 @@
           </script>
           </t>
           <t t-else="">
-            <div class="w-100 nexi-apm-inline d-none" t-att-data-method-code="pm_sudo.code">
-              <div class="nexi-apm-frame my-1"></div>
-              <p class="alert alert-danger mt-2 d-none"></p>
-            </div>
+            <div class="w-100 nexi-apm-row d-none" t-att-data-method-code="pm_sudo.code"></div>
           </t>
         </t>
       </xpath>
