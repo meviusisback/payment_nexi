@@ -69,7 +69,8 @@ class TestNexiPure(unittest.TestCase):
         self.assertEqual(METHOD_SERVICE.get('mybank'), 'MYBANK')
         self.assertEqual(METHOD_SERVICE.get('bancomatpay'), 'BANCOMATPAY')
         self.assertEqual(METHOD_SERVICE.get('paypal'), 'PAYPAL')
-        self.assertEqual(METHOD_SERVICE.get('paypal_bnpl'), 'PAYPAL_BNPL')
+        # PAYPAL_BNPL viene ignorato da Nexi: il codice vero e' PAYPAL_PAGAIN3
+        self.assertEqual(METHOD_SERVICE.get('paypal_bnpl'), 'PAYPAL_PAGAIN3')
 
     def test_test_keys_present(self):
         # Le chiavi finte devono essere quelle note, mai vuote.

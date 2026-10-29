@@ -22,7 +22,7 @@ METHOD_SERVICE = {
     'bancomatpay': 'BANCOMATPAY',
     'mybank': 'MYBANK',
     'paypal': 'PAYPAL',
-    'paypal_bnpl': 'PAYPAL_BNPL',
+    'paypal_bnpl': 'PAYPAL_PAGAIN3',  # codice vero Nexi; PAYPAL_BNPL viene ignorato
 }
 
 def _nexi_short(masked):

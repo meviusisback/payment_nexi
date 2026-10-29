@@ -90,6 +90,18 @@ class NexiController(http.Controller):
             ('payment_method_id', '=', method.id),
             ('state', '=', 'draft'),
         ], order='id desc', limit=1)
+        if tx:
+            # Il carrello puo' cambiare: la bozza deve seguire l'importo vero,
+            # altrimenti si paga (o si rifiuta) la cifra vecchia.
+            refresh = {}
+            if tx.amount != order.amount_total:
+                refresh['amount'] = order.amount_total
+            if tx.currency_id != order.currency_id:
+                refresh['currency_id'] = order.currency_id.id
+            if tx.partner_id != order.partner_invoice_id:
+                refresh['partner_id'] = order.partner_invoice_id.id
+            if refresh:
+                tx.write(refresh)
         if not tx:
             base = order.name or 'S'
             n = Tx.search_count([('sale_order_ids', 'in', order.id)])
@@ -147,6 +159,14 @@ class NexiController(http.Controller):
         except Exception as e:
             import logging as _logging
             _logging.getLogger(__name__ + '.prepare').warning('prepare KO: %s', str(e)[:200])
+            msg = str(e)
+            # Paga in 3 ha un minimo di 30 € lato Nexi: dico il motivo vero
+            # e faccio sparire la riga, invece di un errore generico.
+            if method_code == 'paypal_bnpl' and ('PS0064' in msg or 'GW0043' in msg):
+                return {
+                    'error': 'PayPal Paga in 3 richiede almeno 30,00 € di ordine.',
+                    'hide': 'paypal_bnpl',
+                }
             return {'error': str(e)[:200]}
         host = 'https://xpaysandbox.nexigroup.com' if provider.nexi_env == 'test' else 'https://xpay.nexigroup.com'
         return {

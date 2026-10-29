@@ -445,7 +445,7 @@
                   loadSdk(r.sdk, initBuild);
                 }).catch(function () { done = false; fail('Form non caricato. Riprova.'); });
               }
-              var BTNMAP = {googlepay: 'GOOGLEPAY', applepay: 'APPLEPAY', bancomatpay: 'BANCOMATPAY', mybank: 'MYBANK', paypal: 'PAYPAL', paypal_bnpl: 'PAYPAL_PAGAIN3'};
+              var BTNMAP = {googlepay: 'GOOGLEPAY', applepay: 'APPLEPAY', bancomatpay: 'BANCOMATPAY', mybank: 'MYBANK', paypal: 'PAYPAL'};
               // Nascondo le righe il cui metodo Nexi non offre davvero.
               function hideUnavailable(buttons) {
                 var ids = {};
@@ -454,7 +454,7 @@
                   var svc = BTNMAP[mark.dataset.methodCode] || '';
                   var li = mark.closest('li[name=o_payment_option]');
                   if (!li) return;
-                  if (svc &amp;&amp; !ids[svc]) li.style.display = 'none';
+                  if (svc &amp;&amp; !ids[svc]) li.style.setProperty('display', 'none', 'important');
                 });
               }
               function initBuild() {
@@ -583,7 +583,8 @@
                   var r = (res &amp;&amp; res.result) || res || {};
                   if (r.url) { window.location.href = r.url; return; }
                   delete apm.dataset.busy;
-                  toast('Metodo non disponibile: ' + (r.error || 'riprova.'));
+                  if (r.hide) { row.style.setProperty('display', 'none', 'important'); }
+                  toast(r.error || 'Metodo non disponibile. Riprova.');
                 }).catch(function () {
                   delete apm.dataset.busy;
                   toast('Metodo non disponibile. Riprova.');
