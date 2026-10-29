@@ -293,7 +293,7 @@
               /* Build: ogni riga è una pillola grigia con logo + nome, senza radio. */
               li[name=o_payment_option] input[type="radio"]{display:none !important}
               li[name=o_payment_option] div[for="o_payment_radio"]{
-                background:#eef0f3 !important;border-radius:8px;width:260px;max-width:100%;
+                background:#eef0f3 !important;border-radius:8px;width:100% !important;max-width:none !important;
                 min-height:52px;display:flex !important;align-items:center;justify-content:center;
                 gap:10px;padding:8px 12px;margin:2px 0;
               }
@@ -355,6 +355,21 @@
               function showSubmit(show) {
                 var b = submitBtn();
                 if (b) b.classList.toggle('d-none', !show);
+              }
+              function toast(msg) {
+                var t = document.getElementById('nexi-toast');
+                if (!t) {
+                  t = document.createElement('div');
+                  t.id = 'nexi-toast';
+                  t.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);' +
+                    'background:#8b1b1b;color:#fff;padding:10px 16px;border-radius:8px;z-index:9999;' +
+                    'font-size:14px;box-shadow:0 4px 14px rgba(0,0,0,.25)';
+                  document.body.appendChild(t);
+                }
+                t.textContent = msg;
+                t.style.display = 'block';
+                clearTimeout(t._h);
+                t._h = setTimeout(function () { t.style.display = 'none'; }, 6000);
               }
               function fail(msg) {
                 var e = document.getElementById('nexi-inline-error');
@@ -474,11 +489,12 @@
                   prepare(true);
                   return;
                 }
-                // Radio nascosto: clicco la riga Carta e apro i campi.
+                // Radio nascosto: clicco la riga Carta e apro/chiudo i campi.
                 var row = t &amp;&amp; t.closest ? t.closest('li[name=o_payment_option]') : null;
                 if (!row || !row.querySelector('#nexi-inline')) return;
                 if (t.closest('#nexi-inline')) return;
                 var b = document.getElementById('nexi-inline');
+                if (b &amp;&amp; !b.classList.contains('d-none')) { b.classList.add('d-none'); return; }
                 var r = row.querySelector('input[data-payment-method-code="card"]');
                 if (r) { try { r.checked = true; } catch (e) {} }
                 if (b) {
@@ -495,8 +511,7 @@
                 if (!apm || apm.dataset.busy) return;
                 apm.dataset.busy = '1';
                 var code = apm.dataset.methodCode;
-                var btn = row.querySelector('div[for="o_payment_radio"]');
-                if (btn) { btn.style.opacity = '0.6'; }
+                if (!code) return;
                 fetch('/payment/nexi/build/prepare', {
                   method: 'POST',
                   headers: {'Content-Type': 'application/json'},
@@ -506,12 +521,10 @@
                   var r = (res &amp;&amp; res.result) || res || {};
                   if (r.url) { window.location.href = r.url; return; }
                   delete apm.dataset.busy;
-                  if (btn) { btn.style.opacity = ''; }
-                  fail('Metodo non disponibile: ' + (r.error || 'riprova.'));
+                  toast('Metodo non disponibile: ' + (r.error || 'riprova.'));
                 }).catch(function () {
                   delete apm.dataset.busy;
-                  if (btn) { btn.style.opacity = ''; }
-                  fail('Metodo non disponibile. Riprova.');
+                  toast('Metodo non disponibile. Riprova.');
                 });
               });
               document.addEventListener('change', function (ev) {
@@ -538,7 +551,7 @@
           </script>
           </t>
           <t t-else="">
-            <div class="w-100 nexi-apm-row d-none" t-att-data-method-code="pm_sudo.code"></div>
+            <div class="nexi-apm-row" style="display:none;" t-att-data-method-code="pm_sudo.code"></div>
           </t>
         </t>
       </xpath>
