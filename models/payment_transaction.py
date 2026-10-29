@@ -12,7 +12,7 @@ _logger = logging.getLogger(__name__)
 # Esiti Nexi. EXECUTED = pagato (automatico). AUTHORIZED = solo bloccato.
 OK_RESULTS = {'EXECUTED'}
 AUTH_RESULTS = {'AUTHORIZED'}
-KO_RESULTS = {'CANCELED', 'THREEDS_FAILED', 'DENIED', 'ERROR'}
+KO_RESULTS = {'CANCELED', 'THREEDS_FAILED', 'DENIED', 'ERROR', 'DECLINED'}
 
 # Metodo Odoo -> paymentService Nexi. Vuoto = tutti. Valori da tabella Nexi.
 METHOD_SERVICE = {
@@ -477,7 +477,7 @@ class PaymentTransactionNexi(models.Model):
         import time as _time
         data = {}
         result = ''
-        for attempt in range(6):
+        for attempt in range(3):
             try:
                 data = provider._nexi_make_request('GET', verify_url)
             except ValidationError as e:
@@ -496,8 +496,8 @@ class PaymentTransactionNexi(models.Model):
             # riprovo invece di dichiarare subito "in attesa".
             if result and result.upper() not in ('PENDING', 'AUTH-REQUEST', 'AUTHORIZED_PENDING'):
                 break
-            if attempt < 5:
-                _time.sleep(1.5)
+            if attempt < 2:
+                _time.sleep(1.0)
         if is_paid(result):
             # Controlla importo e valuta prima di chiudere: tutto in centesimi.
             expected = to_cents(self.amount)

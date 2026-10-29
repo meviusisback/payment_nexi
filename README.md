@@ -1,113 +1,113 @@
-# payment_nexi — Nexi XPay Web per Odoo 18
+# payment_nexi — Nexi XPay Web for Odoo 18
 
-Provider di pagamento per **Nexi XPay Web** (API REST con `X-Api-Key`).
-Due modalità: **Hosted Page** (redirect alla pagina Nexi) ed **Embedded Build v3**
-(campi carta dentro la cassa Odoo). Odoo non vede mai il numero di carta.
+Payment provider for **Nexi XPay Web** (REST API with `X-Api-Key`).
+Two modes: **Hosted Page** (redirect to the Nexi page) and **Embedded Build v3**
+(card fields inside the Odoo checkout). Odoo never sees the card number.
 
-## Cosa fa
+## What it does
 
-- Crea l'ordine su Nexi e mostra la pagina di pagamento (o i campi in cassa).
-- Verifica sempre l'esito **lato server** con `GET /orders/{riferimento}`: il ritorno del browser non è mai credibile.
-- Segna la transazione `done` solo con esito `EXECUTED`, importo e valuta corretti.
-- `AUTHORIZED` = solo autorizzato, non incassato.
-- `CANCELED`, `THREEDS_FAILED`, `DENIED`, `ERROR` = transazione annullata.
-- Salva solo il PAN mascherato (`**** 1234`), mai il numero completo né il CVV.
+- Creates the order on Nexi and shows the payment page (or the fields in the checkout).
+- Always verifies the outcome **server-side** with `GET /orders/{reference}`: the browser return is never trusted.
+- Marks the transaction `done` only with an `EXECUTED` outcome and the correct amount and currency.
+- `AUTHORIZED` = only authorized, not captured.
+- `CANCELED`, `THREEDS_FAILED`, `DENIED`, `ERROR`, `DECLINED` = transaction cancelled.
+- Stores only the masked PAN (`**** 1234`), never the full number or the CVV.
 
-## Metodi inclusi
+## Included methods
 
-| Metodo | Codice Nexi |
+| Method | Nexi code |
 |---|---|
-| Carta | `CARDS` |
+| Card | `CARDS` |
 | Google Pay | `GOOGLEPAY` |
 | Apple Pay | `APPLEPAY` |
 | Bancomat Pay | `BANCOMATPAY` |
 | MyBank | `MYBANK` |
 | PayPal | `PAYPAL` |
-| PayPal Paga in 3 | `PAYPAL_PAGAIN3` |
+| PayPal Pay in 3 | `PAYPAL_PAGAIN3` |
 
-I metodi non abilitati sul terminale si nascondono con il pulsante
-**Verifica metodi su Nexi** nel form del provider.
+Methods not enabled on the terminal are hidden with the
+**Check methods on Nexi** button in the provider form.
 
-## Requisiti
+## Requirements
 
-- Odoo 18 (modulo `payment`).
-- Terminale Nexi XPay Web con `X-Api-Key`.
-- Valuta **EUR** (Nexi rifiuta le altre).
-- Per la modalità Embedded serve un **URL pubblico**: Nexi non accetta `localhost`.
+- Odoo 18 (`payment` module).
+- Nexi XPay Web terminal with `X-Api-Key`.
+- Currency **EUR** (Nexi rejects the others).
+- The Embedded mode needs a **public URL**: Nexi does not accept `localhost`.
 
-## Installazione
+## Installation
 
-1. Copia la cartella `payment_nexi` negli addons di Odoo.
-2. Riavvia Odoo e installa **Nexi XPay Web** da App.
-3. Vai su *Fornitori di pagamento → Nexi XPay Web* e compila i campi.
-4. Pubblica il provider.
-5. Controlla che esista una riga di pagamento collegata al provider
-   (*Contabilità → Configurazione → Metodi di pagamento*), altrimenti Odoo non crea la transazione.
+1. Copy the `payment_nexi` folder into the Odoo addons.
+2. Restart Odoo and install **Nexi XPay Web** from Apps.
+3. Go to *Payment Providers → Nexi XPay Web* and fill in the fields.
+4. Publish the provider.
+5. Make sure a payment method line linked to the provider exists
+   (*Accounting → Configuration → Payment Methods*), otherwise Odoo does not create the transaction.
 
-## Configurazione
+## Configuration
 
-| Campo | Cosa mettere |
+| Field | What to enter |
 |---|---|
-| `X-Api-Key` | Chiave del terminale XPay Web |
-| Ambiente | Test o Produzione |
-| URL Nexi (test/produzione) | Endpoint `…/psp/api/v1/orders/hpp` |
-| Modalità | **Hosted Page** o **Embedded (Build v3)** |
-| Base pubblica negozio | Vuota = `web.base.url`. Metti il dominio pubblico (serve per i ritorni e per Build) |
-| Metodo preselezionato | Vuoto = tutti, oppure es. `GOOGLEPAY` |
-| OneClick | Crea e riusa un contratto per le carte salvate (Hosted Page) |
-| Verifica metodi su Nexi | Nasconde in cassa i metodi non attivi sul terminale |
+| `X-Api-Key` | XPay Web terminal key |
+| Environment | Test or Production |
+| Nexi URL (test/production) | Endpoint `…/psp/api/v1/orders/hpp` |
+| Mode | **Hosted Page** or **Embedded (Build v3)** |
+| Shop public base | Empty = `web.base.url`. Enter the public domain (needed for returns and for Build) |
+| Preselected method | Empty = all, or e.g. `GOOGLEPAY` |
+| OneClick | Creates and reuses a contract for saved cards (Hosted Page) |
+| Check methods on Nexi | Hides terminal-disabled methods at checkout |
 
-Le chiavi di test sono quelle pubblicate da Nexi nella documentazione XPay
-(*Introduzione → API key*). Non vanno inserite nel repository.
+The test keys are the ones published by Nexi in the XPay documentation
+(*Introduction → API key*). They must not be committed to the repository.
 
-## Prova in sandbox
+## Sandbox testing
 
-1. Metti il provider in **Test** con la chiave sandbox di Nexi.
-2. Compra un prodotto, scegli Nexi e paga con una delle carte di test pubblicate
-   da Nexi (es. `4999340261977289`, scadenza `12/30`, CVV `663`: dati finti di sandbox).
-3. Sulla pagina 3DS di prova scegli *AUTENTICAZIONE RIUSCITA*.
-4. La transazione deve risultare `done` con `Nexi OK: EXECUTED`.
+1. Set the provider to **Test** with the Nexi sandbox key.
+2. Buy a product, choose Nexi and pay with one of the test cards published
+   by Nexi (e.g. `4999340261977289`, expiry `12/30`, CVV `663`: fake sandbox data).
+3. On the test 3DS page choose *AUTHENTICATION SUCCESSFUL*.
+4. The transaction must end up `done` with `Nexi OK: EXECUTED`.
 
-## Limiti noti
+## Known limits
 
-- Nessun rimborso e nessuna cattura manuale: l'incasso è sempre automatico.
-- Solo EUR.
-- PayPal Paga in 3 richiede un ordine di almeno 30 € (limite Nexi).
-- I campi carta della modalità Embedded sono iframe di Nexi: bordo, altezza e larghezza interni non sono personalizzabili.
-- La modalità Embedded richiede HTTPS e un dominio raggiungibile da Nexi.
+- No refunds and no manual capture: capture is always automatic.
+- EUR only.
+- PayPal Pay in 3 requires an order of at least €30 (Nexi limit).
+- The Embedded mode card fields are Nexi iframes: inner border, height and width cannot be customized.
+- The Embedded mode requires HTTPS and a domain reachable by Nexi.
 
-## Struttura
+## Layout
 
 ```
 payment_nexi/
-├── __init__.py                     # hook di installazione
+├── __init__.py                     # installation hook
 ├── __manifest__.py
-├── controllers/main.py             # ritorno Nexi + rotte Build
-├── data/payment_method_data.xml    # metodi di pagamento
+├── controllers/main.py             # Nexi return + Build routes
+├── data/payment_method_data.xml    # payment methods
 ├── models/
-│   ├── payment_provider.py         # campi, chiamate API, URL
-│   ├── payment_method_nexi.py      # metodi visibili in cassa
-│   └── payment_transaction.py      # creazione ordine, esito, OneClick
-├── static/description/             # scheda e icona per il marketplace
+│   ├── payment_provider.py         # fields, API calls, URLs
+│   ├── payment_method_nexi.py      # methods visible at checkout
+│   └── payment_transaction.py      # order creation, outcome, OneClick
+├── static/description/             # marketplace card and icon
 └── views/payment_nexi_templates.xml
 ```
 
-## Sicurezza
+## Security
 
-- Ogni transazione ha un codice casuale (`tok`): senza codice giusto le rotte
-  rispondono "non trovato" senza toccare Nexi né il pagamento.
-- L'ordine da verificare lo decide la transazione, mai chi chiama; la risposta
-  di Nexi deve parlare dello stesso ordine, e l'importo è confrontato in
-  centesimi (stessa unità da entrambi i lati).
-- I dati Nexi (`contractId`, sessioni, PAN mascherato) li scrive solo il sistema:
-  scritture esterne via RPC sono rifiutate.
-- Le carte salvate le vede solo il loro proprietario; i contratti sono casuali,
-  non derivati da ID.
-- Limiti di frequenza sulle rotte pubbliche; niente redirect con la chiave API;
-  `Base pubblica negozio` (o `web.base.url`) per resultUrl e merchantUrl, mai
-  l'header Host.
-- Solo messaggi generici al browser; dettagli nei log del server.
+- Every transaction has a random code (`tok`): without the right code the routes
+  answer "not found" without touching Nexi or the payment.
+- The order to verify is decided by the transaction, never by the caller; the
+  Nexi response must refer to the same order, and the amount is compared in
+  cents (same unit on both sides).
+- Nexi data (`contractId`, sessions, masked PAN) is written by the system only:
+  external writes via RPC are rejected.
+- Saved cards are visible only to their owner; contracts are random,
+  not derived from IDs.
+- Rate limits on public routes; no redirects carrying the API key;
+  `Shop public base` (or `web.base.url`) for resultUrl and merchantUrl, never
+  the Host header.
+- Only generic messages to the browser; details stay in the server logs.
 
-## Licenza
+## License
 
-LGPL-3. Vedi [LICENSE](LICENSE).
+LGPL-3. See [LICENSE](LICENSE).
