@@ -293,16 +293,31 @@
               /* Build: ogni riga è una pillola grigia con logo + nome, senza radio. */
               li[name=o_payment_option] input[type="radio"]{display:none !important}
               li[name=o_payment_option] div[for="o_payment_radio"]{
-                background:#eef0f3 !important;border-radius:8px;width:100% !important;max-width:none !important;
-                min-height:52px;display:flex !important;align-items:center;justify-content:center;
+                background:#fff !important;border:1px solid #111 !important;border-radius:8px;
+                width:100% !important;max-width:none !important;box-sizing:border-box;
+                height:52px;display:flex !important;align-items:center;justify-content:center;
                 gap:10px;padding:10px 24px 10px 16px !important;margin:2px 0 !important;
+                white-space:nowrap;overflow:hidden;
               }
-              li[name=o_payment_option]:hover div[for="o_payment_radio"]{background:#e6e9ee !important}
-              li[name=o_payment_option]{cursor:pointer;align-items:flex-start !important}
+              li[name=o_payment_option]:hover div[for="o_payment_radio"]{background:#eff6ff !important}
+              /* Odoo accende bordo/alone sulla riga in hover: lo spengo. */
+              li[name=o_payment_option]:hover{
+                background:transparent !important;border-color:transparent !important;
+                box-shadow:none !important;outline:none !important;
+              }
+              /* Il bordo di selezione aggiunge 1-2px alla riga scelta: lo riservo
+                 su tutte, così la riga selezionata non è più alta delle altre. */
+              li[name=o_payment_option]{
+                cursor:pointer;align-items:flex-start !important;
+                border:1px solid transparent !important;box-sizing:border-box;
+              }
+              li[name=o_payment_option]:has(input:checked){border-color:transparent !important}
               /* Odoo stende la label su tutta la riga: coprirebbe i campi. */
               li[name=o_payment_option] .o_payment_option_label::before{display:none !important}
               li[name=o_payment_option] .o_payment_option_label{font-weight:600;margin:0 !important}
               li[name=o_payment_option] p[name="o_payment_secured_by"]{display:none !important}
+              /* Il contenitore del "secured by" resta alto 8px anche vuoto. */
+              li[name=o_payment_option] div.position-relative{display:none !important}
               li[name=o_payment_option] span.rounded.overflow-hidden{
                 width:auto !important;height:18px !important;min-width:0;background:transparent !important;
                 box-shadow:none !important;overflow:visible !important;border-radius:3px;
