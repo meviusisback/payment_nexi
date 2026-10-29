@@ -311,16 +311,56 @@
                 height:18px !important;width:auto !important;max-width:36px;object-fit:contain;
                 min-height:0 !important;display:block;
               }
+              /* --- pannello carta: stile pulito, accento blu --- */
+              #nexi-inline{
+                background:#fff;border:1px solid #e5eaf3;border-radius:14px;
+                box-shadow:0 1px 2px rgba(16,24,40,.06),0 10px 24px rgba(16,24,40,.07);
+                padding:20px 18px 18px;margin:12px 0 4px;
+              }
+              #nexi-inline .nexi-card-title{
+                font-size:22px;line-height:1.2;font-weight:800;color:#1d4ed8;margin:0 0 6px;
+              }
+              #nexi-inline .nexi-card-sub{font-size:14px;color:#6b7280;margin:0 0 16px}
+              #nexi-inline .nexi-card-brands{display:flex;gap:10px;margin:0 0 16px}
+              #nexi-inline .nexi-brand{
+                display:flex;align-items:center;justify-content:center;width:68px;height:42px;
+                border:1px solid #d7dde8;border-radius:8px;background:#fff;
+              }
+              #nexi-inline .nexi-brand.is-on{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.10)}
+              #nexi-inline .nexi-brand img{height:18px;width:auto;max-width:48px;object-fit:contain}
+              #nexi-inline-fields{display:grid;grid-template-columns:1fr 1fr;gap:14px 12px;margin:0 0 12px}
+              #nexi-inline .nexi-field{display:flex;flex-direction:column;gap:6px;grid-column:1 / -1}
+              #nexi-inline .nexi-field[data-nexi-field="EXPIRATION_DATE"],
+              #nexi-inline .nexi-field[data-nexi-field="SECURITY_CODE"]{grid-column:span 1}
+              #nexi-inline .nexi-field label{font-size:13px;font-weight:600;color:#374151;margin:0}
+              #nexi-inline .nexi-field iframe{border:0;background:transparent;width:100%;display:block}
+              #nexi-inline .nexi-privacy{
+                display:flex;align-items:flex-start;gap:8px;margin:2px 0 14px;font-size:13px;color:#374151;
+              }
+              #nexi-inline .nexi-privacy input{margin-top:2px;accent-color:#2563eb}
+              #nexi-inline-pay{
+                display:block;width:100%;height:48px;border:0;border-radius:8px;background:#2563eb;
+                color:#fff;font-size:16px;font-weight:700;box-shadow:0 1px 2px rgba(37,99,235,.30);
+              }
+              #nexi-inline-pay:hover{background:#1d4ed8}
+              #nexi-inline-pay:disabled{background:#9db8f5}
             </style>
             <div id="nexi-inline" class="w-100 d-none">
-              <div id="nexi-inline-fields" class="d-flex flex-column gap-2 my-2">
+              <h3 class="nexi-card-title">Ultimo passo!</h3>
+              <p class="nexi-card-sub">Inserisci i dati della carta per completare l'acquisto.</p>
+              <div class="nexi-card-brands" aria-hidden="true">
+                <span class="nexi-brand is-on"><img src="/payment_nexi/static/src/img/mastercard.png" alt="Mastercard"/></span>
+                <span class="nexi-brand"><img src="/payment_nexi/static/src/img/visa.png" alt="Visa"/></span>
+                <span class="nexi-brand"><img src="/payment_nexi/static/src/img/amex.png" alt="American Express"/></span>
+              </div>
+              <div id="nexi-inline-fields">
                 <p class="small text-muted">Carico i campi carta…</p>
               </div>
-              <label class="d-flex align-items-start gap-2 my-2 d-none" id="nexi-inline-privacy-wrap">
-                <input type="checkbox" id="nexi-inline-privacy" class="form-check-input mt-1"/>
+              <label class="nexi-privacy d-none" id="nexi-inline-privacy-wrap">
+                <input type="checkbox" id="nexi-inline-privacy" class="form-check-input mt-0"/>
                 <small>Ho letto l'informativa privacy Nexi (<a href="https://www.nexi.it/privacy/xpay.html" target="_blank">nexi.it/privacy/xpay</a>).</small>
               </label>
-              <button type="button" id="nexi-inline-pay" class="btn btn-primary mt-2" style="display:none;">Pay now</button>
+              <button type="button" id="nexi-inline-pay" style="display:none;">Pay now</button>
               <p id="nexi-inline-error" class="alert alert-danger mt-2 d-none"></p>
             </div>
             <script>
@@ -423,7 +463,7 @@
                   (r.fields || []).forEach(function (f) {
                     if (!f || !f.src) return;
                     var wrap = document.createElement('div');
-                    wrap.className = 'd-flex flex-column gap-1 mb-2';
+                    wrap.className = 'nexi-field';
                     wrap.setAttribute('data-nexi-field', f.id || '');
                     var lab = LABELS[f.id];
                     if (lab) {
