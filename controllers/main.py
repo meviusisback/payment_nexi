@@ -23,6 +23,12 @@ class NexiController(http.Controller):
         tx = request.env['payment.transaction'].sudo()._get_tx_from_notification_data(
             'nexi', kw
         )
+        # Notifica Nexi e ritorno del browser arrivano insieme: serializzo sulla
+        # riga, altrimenti la post-elaborazione gira due volte (errore sui follower).
+        request.env.cr.execute(
+            'SELECT id FROM payment_transaction WHERE id = %s FOR UPDATE', (tx.id,)
+        )
+        tx.invalidate_recordset()
         tx._process_notification_data(kw)
         # Senza questo Odoo non conferma l'ordine ne' crea la fattura.
         # Solo una volta: la notifica Nexi e il ritorno del browser arrivano insieme.

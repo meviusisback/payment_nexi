@@ -348,6 +348,9 @@
               }
               #nexi-inline-pay:hover{background:#1d4ed8}
               #nexi-inline-pay:disabled{background:#9db8f5}
+              /* Embedded: il "Pay now" della colonna riepilogo sarebbe un secondo
+                 bottone che non serve (si paga dal pannello carta). Lo tolgo. */
+              .o_cta_navigation_container button[type="submit"].btn-primary{display:none !important}
             </style>
             <div id="nexi-inline" class="w-100 d-none">
               <div id="nexi-inline-fields">
