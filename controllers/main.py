@@ -15,6 +15,10 @@ _NEXI_RL = {}
 
 def _nexi_rl_allow(key, limit, window=60):
     now = time.time()
+    # Tetto alle chiavi: niente crescita senza fine.
+    if len(_NEXI_RL) > 2000:
+        for _k in list(_NEXI_RL)[:1000]:
+            _NEXI_RL.pop(_k, None)
     lst = [t for t in (_NEXI_RL.get(key) or []) if now - t < window]
     if len(lst) >= limit:
         _NEXI_RL[key] = lst

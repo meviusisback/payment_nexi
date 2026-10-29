@@ -77,17 +77,20 @@ class PaymentTransactionNexi(models.Model):
 
     nexi_order_id = fields.Char(string='ID ordine Nexi', readonly=True)
     nexi_contract_id = fields.Char(
-        string='Contratto OneClick', readonly=True,
+        string='Contratto OneClick', readonly=True, groups='base.group_system',
         help='contractId CIT creato al primo pagamento, riusato dopo.',
     )
     nexi_masked_pan = fields.Char(
         string='Carta salvata', readonly=True,
         help='Numero mascherato da Nexi (es. ****7289). Mai la carta vera.',
     )
-    nexi_build_session = fields.Char(string='Sessione Build', readonly=True)
-    nexi_build_token = fields.Char(string='Token Build', readonly=True)
+    nexi_build_session = fields.Char(
+        string='Sessione Build', readonly=True, groups='base.group_system')
+    nexi_build_token = fields.Char(
+        string='Token Build', readonly=True, groups='base.group_system')
     # Codice casuale per transazione: chi non ce l'ha non tocca il pagamento.
-    nexi_access_token = fields.Char(string='Codice accesso Nexi', readonly=True)
+    nexi_access_token = fields.Char(
+        string='Codice accesso Nexi', readonly=True, groups='base.group_system')
 
     def _nexi_family_ids(self, partner_id):
         """Partner + contatti collegati: il contratto vale per tutta la famiglia."""
@@ -163,18 +166,18 @@ class PaymentTransactionNexi(models.Model):
         ], order='id desc', limit=1)
         return tx.payment_method_id.id if tx else False
 
-    @api.model
-    def create(self, vals):
-        vals = dict(vals or {})
-        if not self.env.su and not self.env.user.has_group('base.group_system'):
-            # Il cliente non sceglie token ne' contratti: li fa solo il sistema.
-            for f in ('nexi_contract_id', 'nexi_build_session', 'nexi_build_token',
-                      'nexi_masked_pan', 'nexi_order_id', 'nexi_access_token'):
-                vals.pop(f, None)
-        if not vals.get('nexi_access_token'):
-            import secrets as _secrets
-            vals['nexi_access_token'] = _secrets.token_urlsafe(32)
-        return super().create(vals)
+    @api.model_create_multi
+    def create(self, vals_list):
+        for vals in (vals_list or []):
+            if not self.env.su and not self.env.user.has_group('base.group_system'):
+                # Il cliente non sceglie token ne' contratti: li fa solo il sistema.
+                for f in ('nexi_contract_id', 'nexi_build_session', 'nexi_build_token',
+                          'nexi_masked_pan', 'nexi_order_id', 'nexi_access_token'):
+                    vals.pop(f, None)
+            if not vals.get('nexi_access_token'):
+                import secrets as _secrets
+                vals['nexi_access_token'] = _secrets.token_urlsafe(32)
+        return super().create(vals_list)
 
     def write(self, vals):
         if not self.env.su and not self.env.user.has_group('base.group_system'):
@@ -247,6 +250,7 @@ class PaymentTransactionNexi(models.Model):
         # Base pubblica: campo dedicato, poi web.base.url. L'Host della
         # richiesta vale solo come ultima spiaggia (tunnel di prova): in
         # produzione imposta sempre la base esplicita.
+        self = self.sudo()
         base = (provider.nexi_public_base or '').strip().rstrip('/')
         if not base:
             from urllib.parse import urlparse as _up
@@ -409,6 +413,10 @@ class PaymentTransactionNexi(models.Model):
             self.nexi_build_session = (data or {}).get('sessionId') or False
             self.nexi_build_token = (data or {}).get('securityToken') or False
             _logger.debug('Build carta %s -> sessione %s', self.reference, self.nexi_build_session)
+        if not self.nexi_access_token:
+            import secrets as _secrets
+            self.sudo().nexi_access_token = _secrets.token_urlsafe(32)
+        tok = self.nexi_access_token
         host = 'https://xpaysandbox.nexigroup.com' if provider.nexi_env == 'test' else 'https://xpay.nexigroup.com'
         res.update(
             nexi_build=True,
@@ -417,9 +425,9 @@ class PaymentTransactionNexi(models.Model):
             build_url=(data or {}).get('url') or False,
             build_state=(data or {}).get('state') or False,
             nexi_sdk=host + '/monetaweb/resources/hfsdk.js',
-            build_finalize_url=f'/payment/nexi/build/{self.reference}/finalize',
-            confirm_url=f'/payment/nexi/confirm?ref={self.reference}',
-            redirect_url=f'/payment/nexi/build/{self.reference}',
+            build_finalize_url=f'/payment/nexi/build/{self.reference}/finalize?tok={tok}',
+            confirm_url=f'/payment/nexi/confirm?ref={self.reference}&tok={tok}',
+            redirect_url=f'/payment/nexi/build/{self.reference}?tok={tok}',
         )
         return res
 
@@ -496,6 +504,10 @@ class PaymentTransactionNexi(models.Model):
             cur_ok = True
             masked = False
             op = auth_op or {}
+            got_cur = op.get('operationCurrency')
+            if got_cur and got_cur != self.currency_id.name:
+                self._set_error('Nexi importo non valido.')
+                return
             got = _parse_cents(op.get('operationAmount'))
             masked = (
                 op.get('paymentInstrumentInfo')
