@@ -300,8 +300,12 @@ class PaymentTransactionNexi(models.Model):
         except ValidationError as e:
             self._set_error(str(e))
             raise
-        self.nexi_build_session = (data or {}).get('sessionId') or False
-        self.nexi_build_token = (data or {}).get('securityToken') or False
+        # L'ordine dei soli bottoni (-m) non deve sovrascrivere la sessione
+        # dei campi carta: finalize deve usare quella giusta.
+        if not processing_values.get('no_service'):
+            self.nexi_build_session = (data or {}).get('sessionId') or False
+            self.nexi_build_token = (data or {}).get('securityToken') or False
+            _logger.debug('Build carta %s -> sessione %s', self.reference, self.nexi_build_session)
         host = 'https://xpaysandbox.nexigroup.com' if provider.nexi_env == 'test' else 'https://xpay.nexigroup.com'
         res.update(
             nexi_build=True,

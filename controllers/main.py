@@ -172,7 +172,13 @@ class NexiController(http.Controller):
                 payload={'sessionId': tx.nexi_build_session},
             )
         except Exception as e:
-            return {'error': str(e)[:200]}
+            msg = str(e)[:300]
+            if 'GW0009' in msg or 'not allowed in the current state' in msg:
+                # Sessione consumata o in stato sbagliato: la prossima volta
+                # se ne crea una nuova invece di restare bloccati.
+                tx.nexi_build_session = False
+                tx.nexi_build_token = False
+            return {'error': 'Nexi: ' + msg}
         return {
             'state': (data or {}).get('state'),
             'url': (data or {}).get('url'),
