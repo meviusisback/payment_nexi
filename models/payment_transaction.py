@@ -214,8 +214,14 @@ class PaymentTransactionNexi(models.Model):
         contract = False
         is_card = (self.payment_method_code or '') == 'card'
         want_save = bool(processing_values.get('should_tokenize')) if provider.nexi_oneclick else False
+        # In Build il cliente deve poter inserire una carta nuova: se riusassimo
+        # un contratto salvato, Nexi mostrerebbe la carta mascherata e i campi
+        # non sarebbero compilabili (errore in fase di compilazione).
+        is_build = provider.nexi_mode == 'build'
         if provider.nexi_oneclick and is_card and not processing_values.get('no_service'):
-            contract = self.nexi_contract_id or self._nexi_contract_for_partner(self.partner_id.id)
+            contract = False if is_build else (
+                self.nexi_contract_id or self._nexi_contract_for_partner(self.partner_id.id)
+            )
             if contract:
                 session['recurrence'] = {
                     'action': 'SUBSEQUENT_PAYMENT',

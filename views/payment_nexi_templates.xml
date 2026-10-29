@@ -467,7 +467,18 @@
                       if (state === 'READY_FOR_PAYMENT') { finalize(box); }
                       if (state === 'PAYMENT_COMPLETE') { window.location.href = box.dataset.confirm; }
                     },
-                    onBuildError: function () { fail('Errore Nexi. Riprova.'); },
+                    onBuildError: function (d) {
+                      var txt = '';
+                      try { txt = JSON.stringify(d || {}).slice(0, 300); } catch (e) { txt = String(d); }
+                      try {
+                        fetch('/payment/nexi/build/jserror', {
+                          method: 'POST',
+                          headers: {'Content-Type': 'application/json'},
+                          body: JSON.stringify({jsonrpc: '2.0', id: 1, params: {msg: 'onBuildError ' + txt}}),
+                        });
+                      } catch (e2) {}
+                      fail('Errore Nexi. Riprova.');
+                    },
                     onConfirmError: function () { fail('Dati non validi. Controlla e riprova.'); },
                   });
                 } catch (e) { fail('SDK Nexi non caricato. Riprova.'); return; }
