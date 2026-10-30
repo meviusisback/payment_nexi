@@ -9,8 +9,8 @@ Two modes: **Hosted Page** (redirect to the Nexi page) and **Embedded Build v3**
 - Creates the order on Nexi and shows the payment page (or the fields in the checkout).
 - Always verifies the outcome **server-side** with `GET /orders/{reference}`: the browser return is never trusted.
 - Marks the transaction `done` only with an `EXECUTED` outcome and the correct amount and currency.
-- `AUTHORIZED` = only authorized, not captured.
-- `CANCELED`, `THREEDS_FAILED`, `DENIED`, `DENIED_BY_RISK`, `ERROR`, `DECLINED`, `FAILED`, `VOIDED`, `REFUNDED` = transaction cancelled. `THREEDS_VALIDATED` (3DS passed, payment still running) waits briefly like `PENDING`.
+- `AUTHORIZED` = only authorized, not captured. `CAPTURE` operations decide the
+  outcome too (implicit-capture payments settle as `CAPTURE / EXECUTED`).
 - Stores only the masked PAN (`**** 1234`), never the full number or the CVV.
 
 ## Included methods
@@ -26,7 +26,9 @@ Two modes: **Hosted Page** (redirect to the Nexi page) and **Embedded Build v3**
 | PayPal Pay in 3 | `PAYPAL_PAGAIN3` |
 
 Methods not enabled on the terminal are hidden with the
-**Check methods on Nexi** button in the provider form.
+**Check methods on Nexi** button in the provider form. Availability is stored
+per terminal, so two terminals sharing a method can differ; outages and
+config errors never hide a method (only an explicit "not enabled" does).
 
 ## Requirements
 
@@ -86,9 +88,12 @@ payment_nexi/
 ├── data/payment_method_data.xml    # payment methods
 ├── models/
 │   ├── payment_provider.py         # fields, API calls, URLs
-│   ├── payment_method_nexi.py      # methods visible at checkout
+│   ├── payment_method_nexi.py      # per-terminal method availability
 │   └── payment_transaction.py      # order creation, outcome, OneClick
+├── security/ir.model.access.csv    # ACLs for the availability model
 ├── static/description/             # marketplace card and icon
+├── tests/test_issue_001.py         # Odoo-side regression tests
+├── test_repro_issue_001.py         # pytest logic tests (no Odoo needed)
 └── views/payment_nexi_templates.xml
 ```
 
@@ -101,11 +106,13 @@ payment_nexi/
   cents (same unit on both sides).
 - Nexi data (`contractId`, sessions, masked PAN) is written by the system only:
   external writes via RPC are rejected.
-- Saved cards are visible only to their owner; contracts are random,
-  not derived from IDs.
-- Rate limits on public routes; no redirects carrying the API key;
-  `Shop public base` (or `web.base.url`) for resultUrl and merchantUrl, never
-  the Host header.
+- Saved cards are visible only to their owner and bound to the terminal that
+  created them; the checkout transmits the chosen card and `new` means no
+  reuse. Contracts are random, not derived from IDs.
+- Rate limits on public routes (server-to-server notifications get their own
+  budget, shared Nexi IPs never starve browser returns); no redirects
+  carrying the API key; `Shop public base` (or `web.base.url`) for resultUrl
+  and merchantUrl, never the Host header.
 - Only generic messages to the browser; details stay in the server logs.
 
 ## License

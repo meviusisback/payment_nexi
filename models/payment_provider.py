@@ -11,20 +11,83 @@ from odoo.exceptions import ValidationError
 _logger = logging.getLogger(__name__)
 
 # Domini Nexi ammessi. Solo questi, resto rifiutato.
-NEXI_HOSTS = ('xpaysandbox.nexigroup.com', 'xpay.nexi.it')
+# Produzione documentata: https://xpay.nexigroup.com (scheda API developer.nexi.it).
+NEXI_HOSTS = ('xpaysandbox.nexigroup.com', 'xpay.nexigroup.com', 'xpay.nexi.it')
+
+# Importi di verifica in centesimi, per paymentService. La verifica crea un
+# vero ordine di prova: deve rispettare i minimi del metodo, altrimenti un
+# metodo sano risulta "rifiutato".
+NEXI_CHECK_AMOUNTS = {
+    'PAYPAL_PAGAIN3': '3000',  # Paga in 3: minimo Nexi 30 euro.
+}
+NEXI_CHECK_AMOUNT_DEFAULT = '100'
+
+
+def _nexi_check_amount_cents(service):
+    """Importo di verifica per un paymentService (stringa in centesimi)."""
+    return NEXI_CHECK_AMOUNTS.get(service or '', NEXI_CHECK_AMOUNT_DEFAULT)
+
+
+class NexiApiError(ValidationError):
+    """Errore HTTP di Nexi con stato e codice gateway: serve a distinguere
+    metodo disabilitato, configurazione sbagliata e guasto temporaneo."""
+
+    def __init__(self, message, status_code=None, gateway_code=None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.gateway_code = gateway_code
+
+
+# Parole che dicono "metodo non abilitato sul terminale" (non un guasto).
+_NEXI_DISABLED_HINTS = (
+    'not enabled', 'not active', 'disabled', 'not allowed', 'not available',
+    'unknown paymentservice', 'invalid paymentservice',
+)
+
+
+def _classify_nexi_check_error(err):
+    """'disabled' = metodo spento sul terminale; 'config' = chiavi/URL
+    sbagliati; 'unknown' = guasto temporaneo o risposta mai vista.
+    Solo 'disabled' cambia la visibilita in cassa: un timeout o un 500 non
+    devono mai spegnere un metodo valido."""
+    status = getattr(err, 'status_code', None)
+    if status in (401, 403):
+        return 'config'
+    msg = str(err) or ''
+    low = msg.lower()
+    if any(k in low for k in (
+        'manca url', 'manca la x-api-key', 'x-api-key', 'serve https',
+        'dominio non nexi',
+    )):
+        return 'config'
+    if 'paymentservice' in low and any(k in low for k in (
+        'not', 'invalid', 'unknown', 'disabled', 'enable', 'support',
+    )):
+        return 'disabled'
+    if any(k in low for k in _NEXI_DISABLED_HINTS):
+        return 'disabled'
+    return 'unknown'
+
+
+def _nexi_first_error(resp):
+    """(descrizione, codice) del primo errore Nexi, senza dati sensibili."""
+    try:
+        errs = (resp.json() or {}).get('errors') or []
+        if errs and isinstance(errs[0], dict):
+            return (
+                str(errs[0].get('description') or ''),
+                str(errs[0].get('code') or ''),
+            )
+    except (ValueError, AttributeError):
+        pass
+    return '', ''
 
 
 def _nexi_error_detail(resp):
     """Prima descrizione utile da Nexi, senza dati sensibili."""
-    try:
-        errs = (resp.json() or {}).get('errors') or []
-        if errs and isinstance(errs[0], dict):
-            desc = str(errs[0].get('description') or '')
-            code = str(errs[0].get('code') or '')
-            if desc:
-                return '%s [%s]' % (desc[:160], code[:16]) if code else desc[:160]
-    except (ValueError, AttributeError):
-        pass
+    desc, code = _nexi_first_error(resp)
+    if desc:
+        return '%s [%s]' % (desc[:160], code[:16]) if code else desc[:160]
     return 'errore. Riprova.'
 
 
@@ -91,7 +154,13 @@ class PaymentProviderNexi(models.Model):
     nexi_methods_checked = fields.Datetime(string='Verifica del', readonly=True)
 
     def button_nexi_check_methods(self):
-        """Prova ogni metodo su Nexi e nasconde quelli rifiutati dal terminale."""
+        """Prova ogni metodo su Nexi e nasconde quelli rifiutati dal terminale.
+
+        Nasconde un metodo solo se Nexi dice chiaramente "non abilitato".
+        Errori di configurazione (chiave/URL) fermano la verifica con un
+        messaggio; guasti temporanei (timeout, 5xx, risposte mai viste)
+        lasciano tutto com'e: non si spegne un metodo valido per un guasto.
+        """
         self.ensure_one()
         from .payment_transaction import METHOD_SERVICE
         service_by_method = {}
@@ -105,13 +174,14 @@ class PaymentProviderNexi(models.Model):
         lines = []
         for method, service in sorted(service_by_method.items(), key=lambda x: x[0].name):
             ref = 'CHECK-%s-%d' % (service, int(time.time()) % 100000)
+            amount = _nexi_check_amount_cents(service)
             payload = {
                 'order': {
-                    'orderId': ref, 'amount': '100', 'currency': 'EUR',
+                    'orderId': ref, 'amount': amount, 'currency': 'EUR',
                     'description': ref,
                 },
                 'paymentSession': {
-                    'actionType': 'PAY', 'amount': '100', 'language': 'ITA',
+                    'actionType': 'PAY', 'amount': amount, 'language': 'ITA',
                     'resultUrl': 'https://example.com/nexi/check',
                     'cancelUrl': 'https://example.com/nexi/check',
                     'captureType': 'IMPLICIT', 'paymentService': service,
@@ -119,13 +189,21 @@ class PaymentProviderNexi(models.Model):
             }
             try:
                 self._nexi_make_request('POST', base, payload)
-                ok = True
-                detail = 'attivo'
-            except ValidationError:
-                ok = False
-                detail = 'rifiutato dal terminale'
-            method.nexi_disabled = not ok
-            lines.append('%s (%s): %s' % (method.name, service, detail))
+            except ValidationError as e:
+                kind = _classify_nexi_check_error(e)
+                if kind == 'config':
+                    raise ValidationError(_(
+                        'Verifica metodi: controlla X-Api-Key e URL Nexi (%s).'
+                    ) % service)
+                if kind == 'unknown':
+                    lines.append('%s (%s): non verificato (%s)' % (
+                        method.name, service, str(e)[:80]))
+                    continue
+                method._nexi_set_disabled(self, True)
+                lines.append('%s (%s): rifiutato dal terminale' % (method.name, service))
+                continue
+            method._nexi_set_disabled(self, False)
+            lines.append('%s (%s): attivo' % (method.name, service))
         self.nexi_methods_report = '\n'.join(lines)
         from odoo import fields as odoo_fields
         self.nexi_methods_checked = odoo_fields.Datetime.now()
@@ -161,10 +239,18 @@ class PaymentProviderNexi(models.Model):
         return host_base + prefix + '/orders/build'
 
     def _get_supported_currencies(self):
+        # Upstream chiede ensure_one + super() fuori da Nexi: senza, anche gli
+        # altri provider perderebbero le loro valute.
+        self.ensure_one()
+        if self.code != 'nexi':
+            return super()._get_supported_currencies()
         # Nexi sandbox vuole EUR. Tieni solo EUR.
         return self.env['res.currency'].search([('name', '=', 'EUR')])
 
     def _get_default_payment_method_codes(self):
+        self.ensure_one()
+        if self.code != 'nexi':
+            return super()._get_default_payment_method_codes()
         return {'card', 'googlepay', 'applepay', 'bancomatpay', 'mybank', 'paypal', 'paypal_bnpl'}
 
     def _compute_feature_support_fields(self):
@@ -203,7 +289,12 @@ class PaymentProviderNexi(models.Model):
                 resp.raise_for_status()
             except requests.exceptions.HTTPError:
                 _logger.error('Nexi %s %s -> %s', method, url, (resp.text or '')[:500])
-                raise ValidationError(_('Nexi: %s') % _nexi_error_detail(resp))
+                _desc, _code = _nexi_first_error(resp)
+                raise NexiApiError(
+                    _('Nexi: %s') % _nexi_error_detail(resp),
+                    status_code=getattr(resp, 'status_code', None),
+                    gateway_code=_code or None,
+                )
         except requests.exceptions.RequestException:
             _logger.exception('Nexi non raggiungibile: %s', url)
             raise ValidationError(_('Nexi non raggiungibile. Riprova.'))
