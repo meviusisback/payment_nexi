@@ -53,6 +53,11 @@
           function iframeFor(f, height) {
             var i = document.createElement('iframe');
             i.src = f.src; i.scrolling = 'no';
+            // Titolo e nome: aiutano lettori di schermo e compilatori
+            // automatici a capire cos'e' il campo dentro l'iframe.
+            var _titles = {CARD_NUMBER: 'Numero carta', EXPIRATION_DATE: 'Scadenza', SECURITY_CODE: 'Codice di sicurezza', CARDHOLDER_NAME: 'Nome e cognome', CARDHOLDER_SURNAME: 'Cognome', CARDHOLDER_EMAIL: 'Email'};
+            i.setAttribute('title', 'Nexi - ' + (_titles[f.id] || f.id || 'campo carta'));
+            i.setAttribute('name', 'nexi-' + String(f.id || 'campo').toLowerCase().replace(/_/g, '-'));
             i.style.border = '0'; i.style.width = '100%';
             i.style.height = height || '60px';
             return i;
@@ -142,6 +147,11 @@
           function iframeFor(f, height) {
             var i = document.createElement('iframe');
             i.src = f.src; i.scrolling = 'no';
+            // Titolo e nome: aiutano lettori di schermo e compilatori
+            // automatici a capire cos'e' il campo dentro l'iframe.
+            var _titles = {CARD_NUMBER: 'Numero carta', EXPIRATION_DATE: 'Scadenza', SECURITY_CODE: 'Codice di sicurezza', CARDHOLDER_NAME: 'Nome e cognome', CARDHOLDER_SURNAME: 'Cognome', CARDHOLDER_EMAIL: 'Email'};
+            i.setAttribute('title', 'Nexi - ' + (_titles[f.id] || f.id || 'campo carta'));
+            i.setAttribute('name', 'nexi-' + String(f.id || 'campo').toLowerCase().replace(/_/g, '-'));
             i.style.border = '0'; i.style.width = '100%';
             i.style.height = height || '60px';
             i.setAttribute('data-build-id', f.id || '');
@@ -487,6 +497,11 @@
               function iframeFor(f, height) {
                 var i = document.createElement('iframe');
                 i.src = f.src; i.scrolling = 'no';
+            // Titolo e nome: aiutano lettori di schermo e compilatori
+            // automatici a capire cos'e' il campo dentro l'iframe.
+            var _titles = {CARD_NUMBER: 'Numero carta', EXPIRATION_DATE: 'Scadenza', SECURITY_CODE: 'Codice di sicurezza', CARDHOLDER_NAME: 'Nome e cognome', CARDHOLDER_SURNAME: 'Cognome', CARDHOLDER_EMAIL: 'Email'};
+            i.setAttribute('title', 'Nexi - ' + (_titles[f.id] || f.id || 'campo carta'));
+            i.setAttribute('name', 'nexi-' + String(f.id || 'campo').toLowerCase().replace(/_/g, '-'));
                 i.style.border = '0'; i.style.width = '100%';
                 i.style.height = height || '60px';
                 return i;
