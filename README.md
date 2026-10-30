@@ -9,6 +9,8 @@ Two modes: **Hosted Page** (redirect to the Nexi page) and **Embedded Build v3**
 - Creates the order on Nexi and shows the payment page (or the fields in the checkout).
 - Always verifies the outcome **server-side** with `GET /orders/{reference}`: the browser return is never trusted.
 - Marks the transaction `done` only with an `EXECUTED` outcome and the correct amount and currency.
+- Reads the outcome from the **last operation among `AUTHORIZATION` and `CAPTURE`**: with automatic
+  capture Nexi sends both, and looking only at the authorization left paid orders stuck in `pending`.
 - `AUTHORIZED` = only authorized, not captured.
 - `CANCELED`, `THREEDS_FAILED`, `DENIED`, `DENIED_BY_RISK`, `ERROR`, `DECLINED`, `FAILED`, `VOIDED`, `REFUNDED` = transaction cancelled. `THREEDS_VALIDATED` (3DS passed, payment still running) waits briefly like `PENDING`.
 - Stores only the masked PAN (`**** 1234`), never the full number or the CVV.
@@ -27,6 +29,12 @@ Two modes: **Hosted Page** (redirect to the Nexi page) and **Embedded Build v3**
 
 Methods not enabled on the terminal are hidden with the
 **Check methods on Nexi** button in the provider form.
+
+The result of that check is stored **per terminal** (per provider): two Nexi
+providers in the same database can keep different methods. A timeout or a
+broken configuration never hides a method — only an explicit refusal from Nexi
+(*service not enabled*) does. The `Hidden on every Nexi terminal` flag on the
+payment method hides it everywhere, by hand.
 
 ## Requirements
 
@@ -55,7 +63,12 @@ Methods not enabled on the terminal are hidden with the
 | Shop public base | Empty = `web.base.url`. Enter the public domain (needed for returns and for Build) |
 | Preselected method | Empty = all, or e.g. `GOOGLEPAY` |
 | OneClick | Creates and reuses a contract for saved cards (Hosted Page) |
-| Check methods on Nexi | Hides terminal-disabled methods at checkout |
+| Check methods on Nexi | Tests the terminal and stores the result **for this provider only** |
+
+With OneClick the checkout lists the saved cards: the card the customer picks
+wins over the automatic reuse, and *Use a new card* really starts a new card
+(no stored contract is sent). Cards are per terminal: a contract created on one
+Nexi provider is not offered on another one.
 
 The test keys are the ones published by Nexi in the XPay documentation
 (*Introduction → API key*). They must not be committed to the repository.
@@ -87,10 +100,27 @@ payment_nexi/
 ├── models/
 │   ├── payment_provider.py         # fields, API calls, URLs
 │   ├── payment_method_nexi.py      # methods visible at checkout
+│   ├── payment_nexi_method_availability.py  # methods per terminal
 │   └── payment_transaction.py      # order creation, outcome, OneClick
+├── security/ir.model.access.csv
 ├── static/description/             # marketplace card and icon
+├── tests/                          # Odoo tests + standalone tests
 └── views/payment_nexi_templates.xml
 ```
+
+## Tests
+
+```bash
+# Niente Odoo: logica pura (domini, esito, limiti, sessione)
+python3 -m unittest discover -s tests/standalone -t .
+
+# Con Odoo: installa il modulo in un database di prova
+odoo -d nexi_test -i payment_nexi --test-enable --test-tags /payment_nexi --stop-after-init
+```
+
+The Odoo suite covers the outcome with `AUTHORIZATION` + `CAPTURE`, the pending
+authorization, the amount mismatch, the per-terminal method visibility and the
+currency/method defaults.
 
 ## Security
 
@@ -103,9 +133,17 @@ payment_nexi/
   external writes via RPC are rejected.
 - Saved cards are visible only to their owner; contracts are random,
   not derived from IDs.
-- Rate limits on public routes; no redirects carrying the API key;
-  `Shop public base` (or `web.base.url`) for resultUrl and merchantUrl, never
-  the Host header.
+- Rate limits on public routes. Nexi notifications are counted per transaction,
+  not per IP (the terminal sends every customer's notification from the same
+  address); browser returns stay per IP. The counters live in the process
+  memory, so each worker has its own.
+- The checkout prepares an order only if the cart is payable (`_check_cart_is_ready_to_be_paid`,
+  same check as Odoo), the amount matches, and no other payment is running on
+  that order (row lock like Odoo's).
+- The Build route picks the provider with Odoo's own compatibility rules
+  (company, state, publication, country, currency), not "the first published one".
+- No redirects carrying the API key; `Shop public base` (or `web.base.url`) for
+  resultUrl and merchantUrl, never the Host header.
 - Only generic messages to the browser; details stay in the server logs.
 
 ## License

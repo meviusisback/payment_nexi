@@ -69,6 +69,57 @@ def _nexi_new_contract_id():
     return 'N' + _secrets.token_hex(8).upper()
 
 
+# Operazioni Nexi che decidono com'è andata. Con l'incasso automatico Nexi
+# restituisce AUTHORIZATION *e* CAPTURE: guardare solo l'autorizzazione lascia
+# il pagamento appeso anche quando i soldi sono già stati presi.
+AUTH_OPS = {'AUTHORIZATION'}
+CAPTURE_OPS = {'CAPTURE'}
+
+# Il cliente che sceglie una carta in cassa lascia la scelta qui.
+_NEXI_SESSION_KEY = 'nexi_saved_contract'
+
+
+def _nexi_latest_operation(data, types):
+    """Ultima operazione del tipo indicato, per data, nella risposta Nexi."""
+    ops = [
+        o for o in ((data or {}).get('operations') or [])
+        if isinstance(o, dict) and (o.get('operationType') or '').upper() in types
+    ]
+    if not ops:
+        return {}
+    return max(ops, key=lambda o: str(o.get('operationTime') or ''))
+
+
+def _nexi_decide_operation(data):
+    """L'operazione che decide l'esito: l'ultima fra autorizzazione e incasso.
+
+    :return: (operazione, 'auth' | 'capture'). Operazione vuota se Nexi non
+             ne ha ancora restituita nessuna.
+    """
+    auth = _nexi_latest_operation(data, AUTH_OPS)
+    capture = _nexi_latest_operation(data, CAPTURE_OPS)
+    if not auth:
+        return capture, 'capture'
+    if not capture:
+        return auth, 'auth'
+    if str(capture.get('operationTime') or '') >= str(auth.get('operationTime') or ''):
+        return capture, 'capture'
+    return auth, 'auth'
+
+
+def _nexi_session_choice():
+    """Scelta carta salvata fatta in cassa, se questa richiesta ha una sessione.
+
+    :return: dict {'order_id': int, 'contract_id': str} oppure None.
+    """
+    try:
+        from odoo.http import request
+        choice = request.session.get(_NEXI_SESSION_KEY)
+    except Exception:  # niente richiesta HTTP (cron, RPC, test)
+        return None
+    return choice if isinstance(choice, dict) else None
+
+
 class PaymentTransactionNexi(models.Model):
     _inherit = 'payment.transaction'
 
@@ -99,18 +150,58 @@ class PaymentTransactionNexi(models.Model):
             [('id', 'child_of', commercial)]
         ).ids or [partner_id]
 
-    def _nexi_contract_for_partner(self, partner_id):
+    def _nexi_contract_domain(self, partner_ids, provider_id=None):
+        """Dominio per le carte salvate.
+
+        Il contratto vale per un terminale: un contractId creato su un provider
+        non esiste sugli altri, e riusarlo farebbe fallire il pagamento.
+        """
+        domain = [
+            ('provider_code', '=', 'nexi'),
+            ('partner_id', 'in', list(partner_ids or [])),
+            ('nexi_contract_id', '!=', False),
+        ]
+        if provider_id:
+            domain.append(('provider_id', '=', provider_id))
+        return domain
+
+    def _nexi_contract_for_partner(self, partner_id, provider_id=None):
         """Ultimo contratto CIT pagato di questo partner, se esiste."""
         family = self._nexi_family_ids(partner_id)
         if not family:
             return False
-        tx = self.search([
-            ('provider_code', '=', 'nexi'),
-            ('partner_id', 'in', family),
-            ('nexi_contract_id', '!=', False),
-            ('state', 'in', ['done', 'authorized', 'pending']),
-        ], order='id desc', limit=1)
+        tx = self.search(
+            self._nexi_contract_domain(family, provider_id)
+            + [('state', 'in', ['done', 'authorized', 'pending'])],
+            order='id desc', limit=1,
+        )
         return tx.nexi_contract_id or False
+
+    def _nexi_chosen_contract(self, provider):
+        """Carta che il cliente ha scelto in cassa, se l'ha scelta.
+
+        La scelta arriva dalla sessione (vedi /payment/nexi/saved-card) perché
+        il form di Odoo non porta campi extra fino al provider.
+
+        :return: None  = nessuna scelta, decide l'automatico
+                 False = il cliente vuole una carta nuova
+                 str   = il contractId scelto
+        """
+        choice = _nexi_session_choice()
+        if not choice:
+            return None
+        # Scelta fatta per un altro ordine: non vale per questo pagamento.
+        if choice.get('order_id') not in self.sale_order_ids.ids:
+            return None
+        contract = str(choice.get('contract_id') or '').strip()
+        if not contract:
+            return False
+        cards = {
+            c['contract_id']
+            for c in self.get_nexi_saved_cards(self.partner_id.id, provider.id)
+        }
+        # Contratto che non è del cliente o non è di questo terminale: ignoro.
+        return contract if contract in cards else None
 
     def _nexi_can_see_partner(self, partner_id):
         """Vedo solo le mie carte, a meno che sia il sistema."""
@@ -123,19 +214,18 @@ class PaymentTransactionNexi(models.Model):
         return partner_id in mine
 
     @api.model
-    def get_nexi_saved_cards(self, partner_id):
+    def get_nexi_saved_cards(self, partner_id, provider_id=None):
         """Carte salvate del cliente (solo numeri mascherati). Per la cassa."""
         if not self._nexi_can_see_partner(partner_id):
             return []
         family = self._nexi_family_ids(partner_id)
         if not family:
             return []
-        txs = self.search([
-            ('provider_code', '=', 'nexi'),
-            ('partner_id', 'in', family),
-            ('nexi_contract_id', '!=', False),
-            ('state', 'in', ['done', 'authorized', 'pending']),
-        ], order='id desc')
+        txs = self.search(
+            self._nexi_contract_domain(family, provider_id)
+            + [('state', 'in', ['done', 'authorized', 'pending'])],
+            order='id desc',
+        )
         seen = set()
         cards = []
         for tx in txs:
@@ -312,9 +402,17 @@ class PaymentTransactionNexi(models.Model):
         # non sarebbero compilabili (errore in fase di compilazione).
         is_build = provider.nexi_mode == 'build'
         if provider.nexi_oneclick and is_card and not processing_values.get('no_service'):
-            contract = False if is_build else (
-                self.nexi_contract_id or self._nexi_contract_for_partner(self.partner_id.id)
-            )
+            chosen = self._nexi_chosen_contract(provider)
+            if is_build:
+                contract = False
+            elif chosen is not None:
+                # Il cliente ha scelto: la sua scelta vince sull'automatico.
+                # False = "usa una nuova carta".
+                contract = chosen or False
+            else:
+                contract = self.nexi_contract_id or self._nexi_contract_for_partner(
+                    self.partner_id.id, provider.id
+                )
             if contract:
                 session['recurrence'] = {
                     'action': 'SUBSEQUENT_PAYMENT',
@@ -447,11 +545,12 @@ class PaymentTransactionNexi(models.Model):
     @api.model
     def _nexi_last_auth(self, data):
         """L'ordine puo' avere piu' tentativi: conta solo l'ultimo."""
-        ops = [o for o in ((data or {}).get('operations') or [])
-               if o.get('operationType') == 'AUTHORIZATION']
-        if not ops:
-            return {}
-        return max(ops, key=lambda o: str(o.get('operationTime') or ''))
+        return _nexi_latest_operation(data, AUTH_OPS)
+
+    @api.model
+    def _nexi_last_capture(self, data):
+        """Ultimo incasso (CAPTURE) dell'ordine, se Nexi l'ha già fatto."""
+        return _nexi_latest_operation(data, CAPTURE_OPS)
 
     def _process_notification_data(self, notification_data):
         super()._process_notification_data(notification_data)
@@ -474,6 +573,8 @@ class PaymentTransactionNexi(models.Model):
         import time as _time
         data = {}
         result = ''
+        op = {}
+        op_kind = 'auth'
         for attempt in range(3):
             try:
                 data = provider._nexi_make_request('GET', verify_url)
@@ -481,14 +582,16 @@ class PaymentTransactionNexi(models.Model):
                 _logger.warning('Nexi verifica %s KO: %s', self.reference, str(e)[:200])
                 self._set_error('Nexi non raggiungibile. Riprova.')
                 return
-            auth_op = self._nexi_last_auth(data)
+            # Decide l'ultima operazione: con l'incasso automatico Nexi manda
+            # AUTHORIZATION + CAPTURE e l'esito vero sta sull'incasso.
+            op, op_kind = _nexi_decide_operation(data)
             got_order = (data.get('orderId')
                          or (data.get('orderStatus') or {}).get('order', {}).get('orderId')
                          or '')
             if got_order and got_order != order_ref:
                 self._set_error('Ritorno Nexi non valido.')
                 return
-            result = ((auth_op or {}).get('operationResult') or '').upper()
+            result = ((op or {}).get('operationResult') or '').upper()
             # Il circuito a volte risponde PENDING per qualche secondo:
             # riprovo invece di dichiarare subito "in attesa".
             if result and result not in WAIT_RESULTS:
@@ -496,14 +599,18 @@ class PaymentTransactionNexi(models.Model):
             if attempt < 2:
                 _time.sleep(1.0)
         if is_paid(result):
-            # Controlla importo e valuta prima di chiudere: tutto in centesimi.
+            # Controlla importo e valuta dell'operazione che ha deciso, poi
+            # che l'incasso copra davvero la cifra: tutto in centesimi.
             expected = to_cents(self.amount)
-            op = auth_op or {}
             got_cur = op.get('operationCurrency')
             if got_cur and got_cur != self.currency_id.name:
                 self._set_error('Nexi importo non valido.')
                 return
-            got = _parse_cents(op.get('operationAmount'))
+            amount_raw = op.get('operationAmount')
+            if amount_raw in (None, ''):
+                # Sull'incasso l'importo può stare in capturedAmount.
+                amount_raw = op.get('capturedAmount')
+            got = _parse_cents(amount_raw)
             masked = (
                 op.get('paymentInstrumentInfo')
                 or op.get('maskedPan')
@@ -511,7 +618,9 @@ class PaymentTransactionNexi(models.Model):
                 or False
             )
             status = (data or {}).get('orderStatus', {}) or {}
-            if got is None or got < expected:
+            # Se l'operazione non porta l'importo, il controllo sotto su
+            # capturedAmount resta comunque obbligatorio.
+            if got is not None and got < expected:
                 self._set_error('Nexi importo non valido.')
                 return
             cap = _parse_cents(status.get('capturedAmount', '0'))
@@ -520,13 +629,14 @@ class PaymentTransactionNexi(models.Model):
                 return
             if masked:
                 self.nexi_masked_pan = _nexi_short(masked)
-            self._set_done(state_message=f'Nexi OK: {result}')
+            self._set_done(state_message=f'Nexi OK: {result} ({op_kind})')
         elif result in AUTH_RESULTS:
-            for op in (data or {}).get('operations', []):
-                if op.get('operationType') == 'AUTHORIZATION':
+            # Autorizzato ma non incassato: salvo la carta e lascio in attesa.
+            for auth_op in (data or {}).get('operations', []):
+                if auth_op.get('operationType') == 'AUTHORIZATION':
                     masked_auth = (
-                        op.get('paymentInstrumentInfo')
-                        or op.get('maskedPan')
+                        auth_op.get('paymentInstrumentInfo')
+                        or auth_op.get('maskedPan')
                         or False
                     )
                     if masked_auth:

@@ -1,0 +1,3 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_payment_nexi_method_availability_system,payment.nexi.method.availability system,model_payment_nexi_method_availability,base.group_system,1,1,1,1
+access_payment_nexi_method_availability_user,payment.nexi.method.availability user,model_payment_nexi_method_availability,base.group_user,1,0,0,0

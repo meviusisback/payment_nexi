@@ -15,6 +15,7 @@ Carta, Google Pay, Apple Pay, Bancomat Pay, MyBank, PayPal e PayPal Paga in 3.
     'license': 'LGPL-3',
     'depends': ['payment', 'website', 'website_sale'],
     'data': [
+        'security/ir.model.access.csv',
         'views/payment_nexi_templates.xml',
         'data/payment_method_data.xml',
     ],

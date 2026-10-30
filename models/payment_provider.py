@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """Provider Nexi XPay Web. Solo redirect (Hosted Page). Niente dati carta in Odoo."""
 import logging
-import re
+import uuid
+from urllib.parse import urlparse
 
 import requests
 
@@ -11,7 +12,49 @@ from odoo.exceptions import ValidationError
 _logger = logging.getLogger(__name__)
 
 # Domini Nexi ammessi. Solo questi, resto rifiutato.
-NEXI_HOSTS = ('xpaysandbox.nexigroup.com', 'xpay.nexi.it')
+# xpay.nexigroup.com = produzione, xpaysandbox.nexigroup.com = test.
+NEXI_HOSTS = ('xpay.nexigroup.com', 'xpaysandbox.nexigroup.com', 'xpay.nexi.it')
+
+# Importo di prova per "Verifica metodi". Alcuni servizi hanno minimi propri:
+# PayPal Paga in 3 sotto i 30 € viene rifiutato da Nexi (PS0064/GW0043), quindi
+# la verifica userebbe un errore di importo al posto della disponibilità vera.
+CHECK_AMOUNTS = {'PAYPAL_PAGAIN3': '5000'}
+CHECK_AMOUNT_DEFAULT = '100'
+
+# Testi con cui Nexi dice "questo servizio non è attivo su questo terminale".
+# Solo questi spengono un metodo: un timeout o una chiave sbagliata no.
+REJECTION_MARKERS = (
+    'not enabled', 'not_enabled', 'not allowed', 'not_allowed',
+    'not configured', 'not_configured', 'not available', 'not_available',
+    'service not', 'payment service not',
+    'ps0064', 'gw0043',
+)
+
+
+class NexiUnavailable(ValidationError):
+    """Nexi non ha risposto (rete, timeout, risposta illeggibile).
+
+    Non dice niente sul metodo provato: chi la riceve non deve disabilitare
+    niente, perché il problema è la connessione o la configurazione.
+    """
+
+
+def is_nexi_url(url):
+    """True solo per https su un dominio Nexi.
+
+    Unico posto dove si controlla il dominio: lo usano sia il provider sia il
+    controller, così le due regole non possono divergere.
+    """
+    if not url:
+        return False
+    try:
+        parts = urlparse(str(url).strip())
+        host = (parts.hostname or '').lower()
+    except ValueError:
+        return False
+    if (parts.scheme or '').lower() != 'https' or not host:
+        return False
+    return any(host == h or host.endswith('.' + h) for h in NEXI_HOSTS)
 
 
 def _nexi_error_detail(resp):
@@ -89,11 +132,20 @@ class PaymentProviderNexi(models.Model):
         help='Ultimo controllo su Nexi: quali paymentService il terminale accetta.',
     )
     nexi_methods_checked = fields.Datetime(string='Verifica del', readonly=True)
+    # Esito per singolo terminale: due provider Nexi possono avere metodi diversi.
+    nexi_method_availability_ids = fields.One2many(
+        'payment.nexi.method.availability', 'provider_id',
+        string='Metodi del terminale', readonly=True, groups='base.group_system',
+    )
 
     def button_nexi_check_methods(self):
-        """Prova ogni metodo su Nexi e nasconde quelli rifiutati dal terminale."""
+        """Prova ogni metodo su Nexi e salva l'esito per QUESTO terminale."""
         self.ensure_one()
         from .payment_transaction import METHOD_SERVICE
+        if not self.nexi_api_key:
+            raise ValidationError(_(
+                'Manca la X-Api-Key: senza chiave non posso verificare i metodi.'
+            ))
         service_by_method = {}
         for m in self.payment_method_ids.filtered(lambda x: x.is_primary):
             if m.code in METHOD_SERVICE:
@@ -101,35 +153,66 @@ class PaymentProviderNexi(models.Model):
         if not service_by_method:
             raise ValidationError(_('Nessun metodo Nexi da verificare.'))
         base = self._nexi_base_url()
-        import time
         lines = []
         for method, service in sorted(service_by_method.items(), key=lambda x: x[0].name):
-            ref = 'CHECK-%s-%d' % (service, int(time.time()) % 100000)
-            payload = {
-                'order': {
-                    'orderId': ref, 'amount': '100', 'currency': 'EUR',
-                    'description': ref,
-                },
-                'paymentSession': {
-                    'actionType': 'PAY', 'amount': '100', 'language': 'ITA',
-                    'resultUrl': 'https://example.com/nexi/check',
-                    'cancelUrl': 'https://example.com/nexi/check',
-                    'captureType': 'IMPLICIT', 'paymentService': service,
-                },
-            }
-            try:
-                self._nexi_make_request('POST', base, payload)
-                ok = True
-                detail = 'attivo'
-            except ValidationError:
-                ok = False
-                detail = 'rifiutato dal terminale'
-            method.nexi_disabled = not ok
+            enabled, detail = self._nexi_check_service(base, service)
+            # L'esito è del terminale, non del metodo in generale.
+            self._nexi_store_availability(method, enabled, detail)
             lines.append('%s (%s): %s' % (method.name, service, detail))
         self.nexi_methods_report = '\n'.join(lines)
-        from odoo import fields as odoo_fields
-        self.nexi_methods_checked = odoo_fields.Datetime.now()
+        self.nexi_methods_checked = fields.Datetime.now()
         return True
+
+    def _nexi_check_service(self, base, service):
+        """Prova un paymentService su Nexi con un importo compatibile.
+
+        :return: (True | False | None, descrizione). None = non verificato:
+                 Nexi non ha risposto o la configurazione è rotta, quindi lo
+                 stato del metodo resta quello di prima.
+        """
+        amount = CHECK_AMOUNTS.get(service, CHECK_AMOUNT_DEFAULT)
+        ref = 'CHECK-%s-%s' % (service, uuid.uuid4().hex[:10])
+        payload = {
+            'order': {
+                'orderId': ref, 'amount': amount, 'currency': 'EUR',
+                'description': ref,
+            },
+            'paymentSession': {
+                'actionType': 'PAY', 'amount': amount, 'language': 'ITA',
+                'resultUrl': 'https://example.com/nexi/check',
+                'cancelUrl': 'https://example.com/nexi/check',
+                'captureType': 'IMPLICIT', 'paymentService': service,
+            },
+        }
+        try:
+            self._nexi_make_request('POST', base, payload)
+        except NexiUnavailable as e:
+            # Rete o timeout: non dice niente sul metodo.
+            return None, 'non verificato (%s)' % str(e)[:80]
+        except ValidationError as e:
+            msg = str(e).lower()
+            if any(marker in msg for marker in REJECTION_MARKERS):
+                return False, 'rifiutato dal terminale'
+            # Errore che non parla del metodo: non lo spengo.
+            return None, 'errore (%s)' % str(e)[:80]
+        return True, 'attivo'
+
+    def _nexi_store_availability(self, method, enabled, detail):
+        """Salva l'esito della verifica per questo terminale."""
+        Avail = self.env['payment.nexi.method.availability'].sudo()
+        values = {
+            'checked_at': fields.Datetime.now(),
+            'detail': (detail or '')[:120],
+        }
+        if enabled is not None:
+            values['disabled'] = not enabled
+        rec = Avail.search([
+            ('provider_id', '=', self.id), ('method_id', '=', method.id),
+        ], limit=1)
+        if rec:
+            rec.write(values)
+        else:
+            Avail.create(dict(values, provider_id=self.id, method_id=method.id))
 
     def _nexi_base_url(self):
         self.ensure_one()
@@ -139,17 +222,13 @@ class PaymentProviderNexi(models.Model):
                 'Manca URL Nexi. Metti URL test/produzione dalla scheda API su developer.nexi.it.'
             ))
         url = url.strip().rstrip('/')
-        parts = re.split(r'://', url, maxsplit=1)
-        if len(parts) != 2 or parts[0].lower() != 'https':
-            raise ValidationError(_('URL Nexi non valido: serve https.'))
-        host = parts[1].split('/')[0].lower()
-        if not any(host == h or host.endswith('.' + h) for h in NEXI_HOSTS):
-            raise ValidationError(_('URL Nexi non valido: dominio non Nexi.'))
+        # https + dominio Nexi: la chiave non deve mai uscire da lì.
+        if not is_nexi_url(url):
+            raise ValidationError(_('URL Nexi non valido: serve https su un dominio Nexi.'))
         return url
 
     def _nexi_build_url(self):
         """URL ordini Build v3: stesso host di HPP, path /orders/build."""
-        from urllib.parse import urlparse
         base = self._nexi_base_url()
         if base.endswith('/orders/hpp'):
             return base[: -len('/orders/hpp')] + '/orders/build'
@@ -161,10 +240,17 @@ class PaymentProviderNexi(models.Model):
         return host_base + prefix + '/orders/build'
 
     def _get_supported_currencies(self):
-        # Nexi sandbox vuole EUR. Tieni solo EUR.
-        return self.env['res.currency'].search([('name', '=', 'EUR')])
+        # Nexi sandbox vuole EUR. Tieni solo EUR, ma solo per Nexi: gli altri
+        # provider sullo stesso negozio non devono essere limitati.
+        self.ensure_one()
+        if self.code != 'nexi':
+            return super()._get_supported_currencies()
+        return self.env['res.currency'].with_context(active_test=False).search([('name', '=', 'EUR')])
 
     def _get_default_payment_method_codes(self):
+        self.ensure_one()
+        if self.code != 'nexi':
+            return super()._get_default_payment_method_codes()
         return {'card', 'googlepay', 'applepay', 'bancomatpay', 'mybank', 'paypal', 'paypal_bnpl'}
 
     def _compute_feature_support_fields(self):
@@ -185,9 +271,12 @@ class PaymentProviderNexi(models.Model):
         return super()._get_redirect_form_view(is_validation=is_validation)
 
     def _nexi_make_request(self, method, url, payload=None, params=None):
-        """Chiama Nexi in REST JSON. Semplice, con timeout."""
+        """Chiama Nexi in REST JSON. Semplice, con timeout.
+
+        :raise NexiUnavailable: Nexi non ha risposto o la risposta è illeggibile.
+        :raise ValidationError: Nexi ha risposto con un errore suo.
+        """
         self.ensure_one()
-        import uuid
         headers = {
             'Content-Type': 'application/json',
             'X-Api-Key': self.nexi_api_key or '',
@@ -196,18 +285,18 @@ class PaymentProviderNexi(models.Model):
         try:
             # Niente redirect: la chiave non deve mai viaggiare su un altro host.
             resp = requests.request(method, url, json=payload, params=params, headers=headers, timeout=(5, 15), allow_redirects=False)
-            if 300 <= (resp.status_code or 0) < 400:
-                _logger.warning('Nexi redirect inatteso %s -> %s', url, resp.headers.get('Location'))
-                raise ValidationError(_('Nexi risposta non valida. Riprova.'))
-            try:
-                resp.raise_for_status()
-            except requests.exceptions.HTTPError:
-                _logger.error('Nexi %s %s -> %s', method, url, (resp.text or '')[:500])
-                raise ValidationError(_('Nexi: %s') % _nexi_error_detail(resp))
         except requests.exceptions.RequestException:
             _logger.exception('Nexi non raggiungibile: %s', url)
-            raise ValidationError(_('Nexi non raggiungibile. Riprova.'))
+            raise NexiUnavailable(_('Nexi non raggiungibile. Riprova.'))
+        if 300 <= (resp.status_code or 0) < 400:
+            _logger.warning('Nexi redirect inatteso %s -> %s', url, resp.headers.get('Location'))
+            raise NexiUnavailable(_('Nexi risposta non valida. Riprova.'))
+        try:
+            resp.raise_for_status()
+        except requests.exceptions.HTTPError:
+            _logger.error('Nexi %s %s -> %s', method, url, (resp.text or '')[:500])
+            raise ValidationError(_('Nexi: %s') % _nexi_error_detail(resp))
         try:
             return resp.json() if resp.text else {}
         except ValueError:
-            raise ValidationError(_('Nexi risposta non valida. Riprova.'))
+            raise NexiUnavailable(_('Nexi risposta non valida. Riprova.'))
