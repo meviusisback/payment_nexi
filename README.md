@@ -10,7 +10,7 @@ Two modes: **Hosted Page** (redirect to the Nexi page) and **Embedded Build v3**
 - Always verifies the outcome **server-side** with `GET /orders/{reference}`: the browser return is never trusted.
 - Marks the transaction `done` only with an `EXECUTED` outcome and the correct amount and currency.
 - `AUTHORIZED` = only authorized, not captured.
-- `CANCELED`, `THREEDS_FAILED`, `DENIED`, `ERROR`, `DECLINED` = transaction cancelled.
+- `CANCELED`, `THREEDS_FAILED`, `DENIED`, `DENIED_BY_RISK`, `ERROR`, `DECLINED`, `FAILED`, `VOIDED`, `REFUNDED` = transaction cancelled. `THREEDS_VALIDATED` (3DS passed, payment still running) waits briefly like `PENDING`.
 - Stores only the masked PAN (`**** 1234`), never the full number or the CVV.
 
 ## Included methods
