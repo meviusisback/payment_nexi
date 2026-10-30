@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 {
     'name': 'Nexi XPay Web',
-    'version': '1.2.0',
+    'version': '1.3.0',
     'category': 'Accounting/Payment Providers',
     'summary': 'Pagamenti Nexi XPay Web: Hosted Page o campi carta in cassa.',
     'description': """
@@ -15,6 +15,7 @@ Carta, Google Pay, Apple Pay, Bancomat Pay, MyBank, PayPal e PayPal Paga in 3.
     'license': 'LGPL-3',
     'depends': ['payment', 'website', 'website_sale'],
     'data': [
+        'security/ir.model.access.csv',
         'views/payment_nexi_templates.xml',
         'data/payment_method_data.xml',
     ],

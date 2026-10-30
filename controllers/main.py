@@ -10,7 +10,14 @@ from odoo.http import request
 _logger = logging.getLogger(__name__)
 
 # Limiti semplici per IP: niente abusi di conferma, ordini o log.
+# Vivono nella memoria del processo: ogni worker ha i suoi contatori.
 _NEXI_RL = {}
+
+# Ritorno del browser: per IP va bene, è un cliente per volta.
+BROWSER_LIMIT = 30
+# Notifiche Nexi: arrivano tutte dallo stesso IP del terminale e riguardano
+# clienti diversi, quindi si contano per transazione (tok) e non per IP.
+NOTIFY_LIMIT = 60
 
 
 def _nexi_rl_allow(key, limit, window=60):
@@ -45,6 +52,18 @@ def _nexi_tok():
     return tok
 
 
+def _nexi_confirm_limit(is_notify, kw):
+    """(chiave, limite) del limitatore per /payment/nexi/confirm.
+
+    Il terminale Nexi manda le notifiche dallo stesso IP per tutti i clienti:
+    contarle per IP bloccherebbe un negozio trafficato. Il ritorno del browser
+    invece resta per IP, perché lì è un cliente per volta.
+    """
+    if is_notify:
+        return 'nexi:notify:%s' % ((kw or {}).get('tok') or '-'), NOTIFY_LIMIT
+    return _nexi_rl_key('confirm'), BROWSER_LIMIT
+
+
 def _nexi_tx_or_404(reference):
     """Transazione solo con il suo codice. Senza codice giusto: 404, senza chiamare Nexi."""
     tx = request.env['payment.transaction'].sudo().search([
@@ -57,6 +76,20 @@ def _nexi_tx_or_404(reference):
     return tx
 
 
+def _nexi_landing_route(landing, has_order):
+    """Dove mandare il browser dopo il pagamento.
+
+    La rotta decisa dal flusso (cassa, portale, fattura) resta com'è: solo se
+    manca o punta alla pagina di stato la sostituiamo, altrimenti il polling
+    ricarica all'infinito. Per un ordine del negozio la meta è la validazione
+    della cassa; per un pagamento senza ordine (fattura, portale) non c'è una
+    cassa da validare, quindi si lascia la rotta originale.
+    """
+    if landing and not str(landing).startswith('/payment/status'):
+        return landing
+    return '/shop/payment/validate' if has_order else (landing or '/payment/confirmation')
+
+
 def _nexi_public_error(e):
     """Al browser solo messaggi sicuri, il resto resta nei log."""
     msg = str(e) or ''
@@ -66,10 +99,16 @@ def _nexi_public_error(e):
         'Manca la X-Api-Key',
         'Build vuole URL pubblico',
         'Metodo Nexi non valido',
-        'Ordine non valido',
-        'Build non attiva',
+        'Metodo non disponibile su questo terminale',
         'Metodo carta mancante',
+        'Ordine non valido',
+        'Ordine già pagato',
+        'Build non attiva',
         'Troppe richieste',
+        'Il tuo carrello non è pronto',
+        'Your cart is not ready',
+        'No shipping method is selected',
+        'The delivery method is not compatible',
     )
     if msg.startswith(safe):
         return msg[:200]
@@ -78,31 +117,121 @@ def _nexi_public_error(e):
 
 
 def _nexi_check_url(url):
-    """URL da Nexi: solo https su domini Nexi, niente redirect a giro."""
-    if not url:
-        return False
-    try:
-        from urllib.parse import urlparse
-        from . import payment_provider as _pp
-    except Exception:
-        from odoo.addons.payment_nexi.models import payment_provider as _pp
-    try:
-        parts = urlparse(url)
-    except Exception:
-        return False
-    if (parts.scheme or '').lower() != 'https':
-        return False
-    host = (parts.hostname or '').lower()
-    return any(host == h or host.endswith('.' + h) for h in _pp.NEXI_HOSTS)
+    """URL da Nexi: solo https su domini Nexi, niente redirect a giro.
+
+    La regola dei domini vive in un posto solo (models/payment_provider.py),
+    così controller e provider non possono divergere: senza
+    xpay.nexigroup.com la produzione veniva rifiutata.
+    """
+    from odoo.addons.payment_nexi.models.payment_provider import is_nexi_url
+    return is_nexi_url(url)
 
 
 class NexiController(http.Controller):
+    # --- Aiutanti condivisi ---
+
+    def _nexi_order_ready(self, order):
+        """Le stesse precondizioni della cassa Odoo. None = si può pagare.
+
+        Il vecchio prepare si fidava solo dell'importo: passava con un carrello
+        senza spedizione scelta, con l'ordine annullato o già pagato.
+        """
+        if not order or not order.id:
+            return 'Ordine non valido.'
+        if order.state == 'cancel':
+            return 'Ordine non valido.'
+        try:
+            # Metodo di website_sale: carrello pronto + spedizione valida.
+            order._check_cart_is_ready_to_be_paid()
+        except Exception as e:
+            return (str(e) or 'Ordine non valido.')[:200]
+        compare = order.currency_id.compare_amounts
+        if compare(order.amount_paid, order.amount_total) == 0:
+            return 'Ordine già pagato.'
+        if order.amount_total <= 0:
+            return 'Ordine non valido.'
+        return None
+
+    def _nexi_lock_order(self, order):
+        """Blocca l'ordine come fa Odoo: due schede non pagano due volte.
+
+        Savepoint: se il lock non c'è (un altro pagamento è in corso) la
+        transazione resta usabile e rispondiamo "riprova" invece di romperla.
+        """
+        try:
+            with request.env.cr.savepoint():
+                request.env.cr.execute(
+                    'SELECT 1 FROM sale_order WHERE id = %s FOR NO KEY UPDATE NOWAIT',
+                    (order.id,),
+                )
+        except Exception:
+            return False
+        return True
+
+    def _nexi_provider(self, order, mode=None, provider_id=None):
+        """Provider Nexi compatibile con questo ordine, azienda, sito e valuta.
+
+        Le regole sono quelle di Odoo (azienda, stato, pubblicazione, paese,
+        valuta): un "search(limit=1)" qualunque prendeva il primo provider
+        pubblicato, anche di un'altra azienda o senza Build.
+        """
+        providers = request.env['payment.provider'].sudo()._get_compatible_providers(
+            order.company_id.id, order.partner_id.id, order.amount_total,
+            order.currency_id.id,
+        )
+        providers = providers.filtered(lambda p: p.code == 'nexi')
+        if mode:
+            providers = providers.filtered(lambda p: p.nexi_mode == mode)
+        if provider_id:
+            # Il provider chiesto dal browser vale solo se è fra i compatibili:
+            # un id inventato non deve scegliere il terminale.
+            providers = providers.filtered(lambda p: p.id == provider_id)
+        elif len(providers) > 1:
+            _logger.warning(
+                'Nexi: %s provider compatibili con l\'ordine %s (%s), uso il primo '
+                'per sequenza. Configura un solo provider per sito.',
+                len(providers), order.name, providers.ids,
+            )
+        return providers.sorted(lambda p: (p.sequence, p.id))[:1]
+
+    @http.route('/payment/nexi/saved-card', type='json', auth='public', website=True, methods=['POST'], csrf=False)
+    def nexi_saved_card(self, contract_id=None, **kw):
+        """Ricorda quale carta salvata ha scelto il cliente per questo ordine.
+
+        Il form di Odoo non porta campi extra fino al provider: la scelta
+        viaggia in sessione e viene riletta in _get_specific_rendering_values.
+        """
+        if not _nexi_rl_allow(_nexi_rl_key('saved'), 30):
+            return {'error': 'Troppe richieste. Riprova tra un minuto.'}
+        order = request.website.sale_get_order()
+        if not order or not order.id:
+            return {'ok': True}
+        partner = order.partner_id
+        provider = self._nexi_provider(order)
+        choice = str(contract_id or '').strip()
+        if provider and partner:
+            cards = request.env['payment.transaction'].sudo().get_nexi_saved_cards(
+                partner.id, provider.id
+            )
+            allowed = {c['contract_id'] for c in cards}
+            # Contratto che non è del cliente: vale come "carta nuova".
+            choice = choice if choice in allowed else ''
+        request.session['nexi_saved_contract'] = {
+            'order_id': order.id,
+            'contract_id': choice,
+        }
+        return {'ok': True}
+
     @http.route('/payment/nexi/confirm', type='http', auth='public', csrf=False, methods=['GET', 'POST'])
     def nexi_confirm(self, **kw):
-        if not _nexi_rl_allow(_nexi_rl_key('confirm'), 30):
+        # Il terminale Nexi manda le notifiche dallo stesso IP per tutti i
+        # clienti: contarle per IP bloccherebbe un negozio trafficato. Il
+        # browser invece resta limitato per IP.
+        is_notify = request.httprequest.method == 'POST'
+        key, limit = _nexi_confirm_limit(is_notify, kw)
+        if not _nexi_rl_allow(key, limit):
             return request.make_response('Troppe richieste. Riprova tra un minuto.', status=429)
         # kw = parametri che Nexi aggiunge al ritorno (ref, cancel, ...).
-        is_notify = request.httprequest.method == 'POST'
         if is_notify and not kw.get('ref'):
             # La notifica arriva come JSON, non come query string.
             try:
@@ -142,10 +271,10 @@ class NexiController(http.Controller):
         # Solo una volta: la notifica Nexi e il ritorno del browser arrivano insieme.
         if not tx.is_post_processed:
             tx._post_process()
-        # Rotta finale: deve portare fuori dalla pagina di stato, altrimenti
-        # il polling la ricarica all'infinito (flickering).
-        if tx.landing_route != '/shop/payment/validate':
-            tx.landing_route = '/shop/payment/validate'
+        # Rotta finale: quella decisa dal flusso (cassa, portale, fattura) va
+        # lasciata com'è. Si tocca solo se manca o se punta alla pagina di
+        # stato, che altrimenti ricarica in loop.
+        tx.landing_route = _nexi_landing_route(tx.landing_route, bool(tx.sale_order_ids))
         if is_notify:
             return 'OK'
         # Dillo alla pagina di stato: senza questa chiave in sessione
@@ -172,26 +301,33 @@ class NexiController(http.Controller):
         })
 
     @http.route('/payment/nexi/build/prepare', type='json', auth='public', website=True, methods=['POST'], csrf=False)
-    def nexi_build_prepare(self, method_code='card', tokenize=False, **kw):
+    def nexi_build_prepare(self, method_code='card', tokenize=False, provider_id=None, **kw):
         """Crea transazione + ordine Build e ridà campi o URL APM."""
         if not _nexi_rl_allow(_nexi_rl_key('prepare'), 20):
             return {'error': 'Troppe richieste. Riprova tra un minuto.'}
         order = request.website.sale_get_order()
-        if not order or not order.amount_total:
-            return {'error': 'Ordine non valido.'}
-        provider = request.env['payment.provider'].sudo().search(
-            [('code', '=', 'nexi'), ('state', '!=', 'disabled'), ('is_published', '=', True)],
-            limit=1,
-        )
-        if not provider or provider.nexi_mode != 'build':
-            return {'error': 'Build non attiva.'}
+        # Le stesse porte che chiude la cassa Odoo: senza queste si poteva
+        # creare un ordine Nexi per un carrello non pagabile.
+        cart_error = self._nexi_order_ready(order)
+        if cart_error:
+            return {'error': cart_error}
         if (order.currency_id.name or '') != 'EUR':
             return {'error': 'Nexi attiva solo in EUR.'}
+        provider = self._nexi_provider(order, mode='build', provider_id=provider_id)
+        if not provider:
+            return {'error': 'Build non attiva.'}
+        if not self._nexi_lock_order(order):
+            # Un altro pagamento sta già girando su questo ordine.
+            return {'error': 'Pagamento già in corso. Riprova tra un istante.'}
         method = request.env['payment.method'].sudo().search(
             [('code', '=', method_code), ('is_primary', '=', True)], limit=1,
         )
         if not method:
             return {'error': 'Metodo carta mancante.'}
+        # Il metodo deve essere di QUESTO terminale e non rifiutato da lui:
+        # la riga in cassa è condivisa, il terminale no.
+        if method not in provider.payment_method_ids or method._nexi_is_disabled(provider.id):
+            return {'error': 'Metodo non disponibile su questo terminale.'}
         Tx = request.env['payment.transaction'].sudo()
         # Host con cui il browser naviga (tunnel compreso): ultima spiaggia
         # per merchantUrl, solo se https pubblico. Vale la base configurata.
