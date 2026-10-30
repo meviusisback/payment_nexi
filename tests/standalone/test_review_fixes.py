@@ -250,6 +250,29 @@ class CheckServiceTest(unittest.TestCase):
     def test_other_services_use_the_default_amount(self):
         self.assertNotIn('CARDS', PROVIDER.CHECK_AMOUNTS)
 
+    def test_temporary_outage_is_not_a_rejection(self):
+        # Un 503 "Service not available" non deve spegnere un metodo valido.
+        for status in (408, 429, 500, 502, 503):
+            err = PROVIDER.NexiApiError('Nexi: Service not available', status_code=status)
+            self.assertEqual(
+                PROVIDER._classify_nexi_check_error(err), 'unknown',
+                'status %s classificato come rifiuto' % status,
+            )
+
+    def test_rejection_on_400_is_still_a_rejection(self):
+        err = PROVIDER.NexiApiError('Nexi: paymentService not enabled', status_code=400)
+        self.assertEqual(PROVIDER._classify_nexi_check_error(err), 'disabled')
+
+    def test_check_order_id_fits_nexi_limit(self):
+        """Nexi accetta orderId fino a 27 caratteri: la verifica deve stare sotto."""
+        class Ok(PROVIDER.PaymentProviderNexi):
+            def _nexi_make_request(self, http_method, url, payload=None, params=None):
+                Ok.last = payload
+                return {}
+        for service in ('CARDS', 'PAYPAL_PAGAIN3', 'BANCOMATPAY', 'GOOGLEPAY'):
+            Ok()._nexi_check_service('https://xpay.nexigroup.com/orders/hpp', service)
+            ref = Ok.last['order']['orderId']
+            self.assertLessEqual(len(ref), 27, '%s: %s' % (service, ref))
     def test_bad_credentials_stop_the_check(self):
         """401/403 non è un metodo spento: è la chiave sbagliata."""
         err = PROVIDER.NexiApiError('Nexi: unauthorized', status_code=401)

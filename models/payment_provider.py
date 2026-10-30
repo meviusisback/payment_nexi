@@ -65,6 +65,11 @@ def _classify_nexi_check_error(err):
     status = getattr(err, 'status_code', None)
     if status in (401, 403):
         return 'config'
+    if status and (status == 408 or status == 429 or status >= 500):
+        # Guasto temporaneo (rate limit, gateway giù): non parla del metodo.
+        # Va controllato PRIMA dei marcatori, altrimenti un "Service not
+        # available" su 503 spegne metodi che funzionano.
+        return 'unknown'
     msg = str(err) or ''
     low = msg.lower()
     if any(k in low for k in (
@@ -239,7 +244,9 @@ class PaymentProviderNexi(models.Model):
                  stato del metodo resta quello di prima.
         """
         amount = CHECK_AMOUNTS.get(service, CHECK_AMOUNT_DEFAULT)
-        ref = 'CHECK-%s-%s' % (service, uuid.uuid4().hex[:10])
+        # Nexi: orderId massimo 27 caratteri. "CK" + servizio corto + casuale
+        # resta sotto il limite per ogni metodo.
+        ref = 'CK%s%s' % (service.replace('_', '')[:10], uuid.uuid4().hex[:6].upper())
         payload = {
             'order': {
                 'orderId': ref, 'amount': amount, 'currency': 'EUR',

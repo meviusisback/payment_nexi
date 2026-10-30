@@ -181,6 +181,46 @@ class TestNexiReview(TransactionCase):
             {'card', 'googlepay', 'applepay', 'bancomatpay', 'mybank', 'paypal', 'paypal_bnpl'},
         )
 
+    def test_method_follows_the_terminal_the_row_will_use(self):
+        """La riga usa il PRIMO provider compatibile: se quello rifiuta il
+        metodo, il metodo non deve comparire (la riga fallirebbe)."""
+        first = self.provider                      # id più basso: è lui la riga
+        second = self.provider.copy({'name': 'Nexi secondo'})
+        self.env['payment.nexi.method.availability'].create({
+            'provider_id': first.id, 'method_id': self.method_card.id, 'disabled': True,
+        })
+        Method = self.env['payment.method']
+        both = Method._get_compatible_payment_methods([first.id, second.id], self.partner.id)
+        self.assertNotIn(self.method_card, both, 'il terminale della riga rifiuta il metodo')
+        # Rifiutato solo dal secondo: la riga usa il primo, che lo accetta.
+        self.env['payment.nexi.method.availability'].search([
+            ('provider_id', '=', first.id), ('method_id', '=', self.method_card.id),
+        ]).unlink()
+        self.env['payment.nexi.method.availability'].create({
+            'provider_id': second.id, 'method_id': self.method_card.id, 'disabled': True,
+        })
+        both = Method._get_compatible_payment_methods([first.id, second.id], self.partner.id)
+        self.assertIn(self.method_card, both)
+
+    def test_reference_longer_than_nexi_limit_is_refused(self):
+        """Nexi accetta orderId fino a 27 caratteri: meglio un errore chiaro."""
+        tx = self.env['payment.transaction'].create({
+            'provider_id': self.provider.id,
+            'payment_method_id': self.method_card.id,
+            'reference': 'RIFERIMENTO-MOLTO-LUNGO-0123456789',
+            'amount': 10.0,
+            'currency_id': (self.currency_eur or self.provider.company_id.currency_id).id,
+            'partner_id': self.partner.id,
+            'operation': 'online_redirect',
+        })
+        vals = {'amount': 10.0, 'currency_id': tx.currency_id.id,
+                'partner_id': self.partner.id, 'reference': tx.reference,
+                'should_tokenize': False, 'base_url': 'https://shop.example.com'}
+        with patch.object(type(tx), '_nexi_post_order') as post:
+            with self.assertRaises(Exception):
+                tx._get_specific_rendering_values(dict(vals))
+            self.assertFalse(post.called, 'non deve nemmeno chiamare Nexi')
+
     def test_saved_cards_belong_to_one_terminal(self):
         partner = self.env.user.partner_id
         other = self.provider.copy({'name': 'Nexi terzo terminale'})

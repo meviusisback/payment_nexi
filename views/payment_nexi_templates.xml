@@ -333,13 +333,43 @@
             (function () {
               // Il form di Odoo non porta campi suoi fino al provider: la scelta
               // la salvo in sessione e il server la rilegge quando crea l'ordine.
+              var pending = 0;
               function send(contract) {
-                fetch('/payment/nexi/saved-card', {
+                pending += 1;
+                return fetch('/payment/nexi/saved-card', {
                   method: 'POST',
                   headers: {'Content-Type': 'application/json'},
                   body: JSON.stringify({jsonrpc: '2.0', id: 1, params: {contract_id: contract || ''}}),
-                }).catch(function () {});
+                }).catch(function () {}).then(function () { pending -= 1; });
               }
+              // Non lascio partire il pagamento mentre la scelta sta ancora
+              // viaggiando: altrimenti la transazione legge quella precedente.
+              function whenSaved(cb) {
+                if (!pending) { cb(); return; }
+                var t0 = Date.now();
+                (function loop() {
+                  if (!pending || Date.now() - t0 > 3000) { cb(); return; }
+                  setTimeout(loop, 40);
+                })();
+              }
+              document.addEventListener('submit', function (ev) {
+                if (!pending) { return; }
+                ev.preventDefault();
+                ev.stopImmediatePropagation();
+                var form = ev.target;
+                whenSaved(function () {
+                  if (form.requestSubmit) { form.requestSubmit(); } else { form.submit(); }
+                });
+              }, true);
+              document.addEventListener('click', function (ev) {
+                var b = ev.target &amp;&amp; ev.target.closest
+                  ? ev.target.closest('button[type="submit"], button[name="o_payment_submit_button"]')
+                  : null;
+                if (!b || !pending) { return; }
+                ev.preventDefault();
+                ev.stopImmediatePropagation();
+                whenSaved(function () { b.click(); });
+              }, true);
               document.addEventListener('change', function (ev) {
                 if (!ev.target.classList || !ev.target.classList.contains('nexi-saved-radio')) return;
                 // Selezionare una carta sceglie anche la riga Carta.

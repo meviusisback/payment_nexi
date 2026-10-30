@@ -244,8 +244,9 @@ class PaymentTransactionNexi(models.Model):
         choice = _nexi_session_choice()
         if not choice:
             return None
-        # Scelta fatta per un altro ordine: non vale per questo pagamento.
-        if choice.get('order_id') not in self.sale_order_ids.ids:
+        # Scelta legata al partner (vale anche per i pagamenti senza carrello).
+        chosen_for = choice.get('partner_id')
+        if chosen_for not in self._nexi_family_ids(self.partner_id.id):
             return None
         contract = str(choice.get('contract_id') or '').strip()
         if not contract:
@@ -483,9 +484,18 @@ class PaymentTransactionNexi(models.Model):
                     'contractId': contract,
                     'contractType': 'CIT',
                 }
+        order_id = self.reference + (processing_values.get('order_suffix') or '')
+        # Nexi accetta orderId fino a 27 caratteri (doc POST /orders/hpp): con un
+        # prefisso di riferimento lungo l'ordine verrebbe rifiutato al buio.
+        if len(order_id) > 27:
+            _logger.error('Nexi: orderId troppo lungo (%s): %s', len(order_id), order_id)
+            raise ValidationError(_(
+                'Riferimento ordine troppo lungo per Nexi (max 27 caratteri): '
+                'accorcia il prefisso dei riferimenti di pagamento.'
+            ))
         payload = {
             'order': {
-                'orderId': self.reference + (processing_values.get('order_suffix') or ''),
+                'orderId': order_id,
                 'amount': str(to_cents(self.amount)),
                 'currency': self.currency_id.name or 'EUR',
                 'description': (self.reference or '')[:100],

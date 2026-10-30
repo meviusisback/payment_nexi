@@ -189,15 +189,17 @@ class NexiController(http.Controller):
         return True
 
     def _nexi_provider(self, order, mode=None, provider_id=None):
-        """Provider Nexi compatibile con questo ordine, azienda, sito e valuta.
+        """Provider Nexi compatibile con l'ordine, l'azienda, il SITO e la valuta.
 
         Le regole sono quelle di Odoo (azienda, stato, pubblicazione, paese,
-        valuta): un "search(limit=1)" qualunque prendeva il primo provider
-        pubblicato, anche di un'altra azienda o senza Build.
+        valuta) più il sito: `website_payment` filtra per `provider.website_id`
+        solo se riceve `website_id`, quindi senza quel parametro due siti della
+        stessa azienda si rubavano il terminale.
         """
         providers = request.env['payment.provider'].sudo()._get_compatible_providers(
             order.company_id.id, order.partner_id.id, order.amount_total,
             order.currency_id.id,
+            website_id=request.website.id if request.website else None,
         )
         providers = providers.filtered(lambda p: p.code == 'nexi')
         if mode:
@@ -224,20 +226,21 @@ class NexiController(http.Controller):
         if not _nexi_rl_allow(_nexi_rl_key('saved'), 30):
             return {'error': 'Troppe richieste. Riprova tra un minuto.'}
         order = request.website.sale_get_order()
-        if not order or not order.id:
+        partner = (order.partner_invoice_id or order.partner_id) if order else request.env.user.partner_id
+        if not partner:
             return {'ok': True}
-        partner = order.partner_id
-        provider = self._nexi_provider(order)
         choice = str(contract_id or '').strip()
-        if provider and partner:
-            cards = request.env['payment.transaction'].sudo().get_nexi_saved_cards(
-                partner.id, provider.id
-            )
-            allowed = {c['contract_id'] for c in cards}
+        if choice:
+            # Vale per il partner, non per l'ordine: così funziona anche per una
+            # fattura pagata dal portale, dove un carrello non esiste.
+            cards = set()
+            Tx = request.env['payment.transaction'].sudo()
+            for prov in request.env['payment.provider'].sudo().search([('code', '=', 'nexi')]):
+                cards.update(c['contract_id'] for c in Tx.get_nexi_saved_cards(partner.id, prov.id))
             # Contratto che non è del cliente: vale come "carta nuova".
-            choice = choice if choice in allowed else ''
+            choice = choice if choice in cards else ''
         request.session['nexi_saved_contract'] = {
-            'order_id': order.id,
+            'partner_id': partner.commercial_partner_id.id or partner.id,
             'contract_id': choice,
         }
         return {'ok': True}
