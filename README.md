@@ -12,7 +12,9 @@ Two modes: **Hosted Page** (redirect to the Nexi page) and **Embedded Build v3**
 - Reads the outcome from the **last operation among `AUTHORIZATION` and `CAPTURE`**: with automatic
   capture Nexi sends both, and looking only at the authorization left paid orders stuck in `pending`.
 - `AUTHORIZED` = only authorized, not captured.
-- `CANCELED`, `THREEDS_FAILED`, `DENIED`, `DENIED_BY_RISK`, `ERROR`, `DECLINED`, `FAILED`, `VOIDED`, `REFUNDED` = transaction cancelled. `THREEDS_VALIDATED` (3DS passed, payment still running) waits briefly like `PENDING`.
+- `CANCELED`, `THREEDS_FAILED`, `DENIED`, `DENIED_BY_RISK`, `ERROR`, `DECLINED`, `FAILED`, `VOIDED` = transaction cancelled. `THREEDS_VALIDATED` (3DS passed, payment still running) waits briefly like `PENDING`.
+- Refunds are **not** followed: the module only reads `AUTHORIZATION` and `CAPTURE`, so a refund done from the Nexi back office leaves the transaction `done`
+  (and the invoice in place). Record it by hand in Odoo.
 - Stores only the masked PAN (`**** 1234`), never the full number or the CVV.
 
 ## Included methods
@@ -131,8 +133,9 @@ currency/method defaults.
   cents (same unit on both sides).
 - Nexi data (`contractId`, sessions, masked PAN) is written by the system only:
   external writes via RPC are rejected.
-- Saved cards are visible only to their owner; contracts are random,
-  not derived from IDs.
+- Saved cards are visible to the owner **and to the other contacts of the same
+  company** (the contract belongs to the commercial partner); contracts are
+  random, not derived from IDs.
 - Rate limits on public routes. Nexi notifications are counted per transaction,
   not per IP (the terminal sends every customer's notification from the same
   address); browser returns stay per IP. The counters live in the process
@@ -142,8 +145,10 @@ currency/method defaults.
   that order (row lock like Odoo's).
 - The Build route picks the provider with Odoo's own compatibility rules
   (company, state, publication, country, currency), not "the first published one".
-- No redirects carrying the API key; `Shop public base` (or `web.base.url`) for
-  resultUrl and merchantUrl, never the Host header.
+- No redirects carrying the API key. `Shop public base` is used for resultUrl and
+  merchantUrl, falling back to `web.base.url`; only if neither is usable (empty or
+  localhost) the request `Host` header is used, with a warning in the log. Set the
+  public base on a shop reachable from the internet.
 - Only generic messages to the browser; details stay in the server logs.
 
 ## License

@@ -77,20 +77,44 @@ def _classify_nexi_check_error(err):
     return 'unknown'
 
 
+# Caratteri che un client HTTP può leggere come separatore di authority ma che
+# urlparse tratta come testo: con questi un URL "sembra" Nexi e finisce altrove.
+_URL_FORBIDDEN_CHARS = ('\\', ' ', '\t', '\r', '\n', '\x00', '\x0b', '\x0c')
+
+
 def is_nexi_url(url):
-    """True solo per https su un dominio Nexi.
+    """True solo per https su un dominio Nexi, con l'authority "pulita".
 
     Unico posto dove si controlla il dominio: lo usano sia il provider sia il
     controller, così le due regole non possono divergere.
+
+    Non basta `urlparse().hostname`: con un backslash o un userinfo il parser di
+    Python e quello del client HTTP (urllib3) leggono due host diversi. Per
+    `https://evil.tld\\@xpay.nexigroup.com/...` urlparse dice
+    `xpay.nexigroup.com` mentre requests chiama `evil.tld`, e la X-Api-Key
+    partirebbe verso l'attaccante. Qui si pretende che il netloc sia esattamente
+    l'host atteso (o `host:443`), senza userinfo, backslash o porta strana.
     """
     if not url:
         return False
+    text = str(url).strip()
+    if any(ch in text for ch in _URL_FORBIDDEN_CHARS):
+        return False
     try:
-        parts = urlparse(str(url).strip())
+        parts = urlparse(text)
         host = (parts.hostname or '').lower()
+        netloc = (parts.netloc or '').lower()
+        port = parts.port
     except ValueError:
         return False
     if (parts.scheme or '').lower() != 'https' or not host:
+        return False
+    if parts.username or parts.password or '@' in netloc:
+        return False
+    if port not in (None, 443):
+        return False
+    # netloc deve essere l'host nudo: niente userinfo, porte o caratteri strani.
+    if netloc not in (host, host + ':443'):
         return False
     return any(host == h or host.endswith('.' + h) for h in NEXI_HOSTS)
 
@@ -133,11 +157,6 @@ class PaymentProviderNexi(models.Model):
     nexi_env = fields.Selection(
         [('test', 'Test'), ('prod', 'Produzione')],
         default='test', string='Ambiente',
-    )
-    # Come incassi: automatico (subito) o manuale (autorizzi ora, incassi dopo).
-    nexi_capture = fields.Selection(
-        [('implicit', 'Automatico'), ('explicit', 'Manuale')],
-        default='implicit', string='Incasso',
     )
     # Come mostri la cassa: redirect pagina Nexi (HPP) o form dentro il sito (Build v3).
     nexi_mode = fields.Selection(
@@ -332,6 +351,10 @@ class PaymentProviderNexi(models.Model):
         :raise ValidationError: Nexi ha risposto con un errore suo.
         """
         self.ensure_one()
+        # Ultima difesa: la chiave non esce se l'URL non è https su un dominio
+        # Nexi "pulito", chiunque abbia costruito l'URL.
+        if not is_nexi_url(url):
+            raise ValidationError(_('URL Nexi non valido: serve https su un dominio Nexi.'))
         headers = {
             'Content-Type': 'application/json',
             'X-Api-Key': self.nexi_api_key or '',

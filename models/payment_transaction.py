@@ -2,10 +2,13 @@
 """Transazione Nexi XPay Web. Un solo flusso: crea ordine -> redirect -> verifica."""
 import logging
 import re
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
 from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, ValidationError
+
+from .payment_provider import is_nexi_url
 
 _logger = logging.getLogger(__name__)
 
@@ -63,6 +66,24 @@ def _parse_cents(value):
     return int(d)
 
 
+def _nexi_safe_fields(fields):
+    """Tiene solo i campi carta con src https su un dominio Nexi.
+
+    Gli iframe dei campi carta sono il punto in cui il cliente digita PAN e CVV:
+    un src che arriva da una risposta alterata (o da un campo nuovo del gateway)
+    non deve poter diventare un iframe di terzi dentro il checkout.
+    """
+    out = []
+    for f in (fields or []):
+        if not isinstance(f, dict):
+            continue
+        if not is_nexi_url(f.get('src')):
+            _logger.warning('Nexi: campo carta scartato (src non Nexi): %s', str(f.get('id'))[:40])
+            continue
+        out.append(f)
+    return out
+
+
 def _nexi_new_contract_id():
     """contractId imprevedibile: N + 16 cifre esadecimali."""
     import secrets as _secrets
@@ -79,6 +100,28 @@ CAPTURE_OPS = {'CAPTURE'}
 _NEXI_SESSION_KEY = 'nexi_saved_contract'
 
 
+def _nexi_op_time(op):
+    """operationTime di Nexi come datetime, o None se manca/illeggibile."""
+    raw = str((op or {}).get('operationTime') or '').strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace('Z', '+00:00'))
+    except ValueError:
+        return None
+
+
+def _nexi_op_ts(op):
+    """operationTime come numero (per ordinare), o None."""
+    dt = _nexi_op_time(op)
+    if dt is None:
+        return None
+    try:
+        return dt.timestamp()
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
 def _nexi_latest_operation(data, types):
     """Ultima operazione del tipo indicato, per data, nella risposta Nexi."""
     ops = [
@@ -87,7 +130,13 @@ def _nexi_latest_operation(data, types):
     ]
     if not ops:
         return {}
-    return max(ops, key=lambda o: str(o.get('operationTime') or ''))
+    # Ordino sulla data interpretata, non sulla stringa: 'T9:00' verrebbe dopo
+    # 'T10:00' a confronto lessicografico.
+    return max(ops, key=lambda o: (
+        _nexi_op_ts(o) is not None,
+        _nexi_op_ts(o) or 0.0,
+        str(o.get('operationTime') or ''),
+    ))
 
 
 def _nexi_decide_operation(data):
@@ -102,7 +151,12 @@ def _nexi_decide_operation(data):
         return capture, 'capture'
     if not capture:
         return auth, 'auth'
-    if str(capture.get('operationTime') or '') >= str(auth.get('operationTime') or ''):
+    auth_ts, capture_ts = _nexi_op_ts(auth), _nexi_op_ts(capture)
+    if auth_ts is None or capture_ts is None:
+        # Data incerta: decide l'autorizzazione, non un incasso di cui non
+        # posso dimostrare che sia più recente.
+        return auth, 'auth'
+    if capture_ts >= auth_ts:
         return capture, 'capture'
     return auth, 'auth'
 
@@ -310,7 +364,10 @@ class PaymentTransactionNexi(models.Model):
             try:
                 return provider._nexi_make_request('POST', url, payload=payload)
             except ValidationError as e2:
-                self._set_error(str(e2))
+                # Il dettaglio di Nexi resta nei log: in state_message va solo
+                # un messaggio generico (lo legge anche il cliente).
+                _logger.warning('Nexi ordine %s KO: %s', self.reference, str(e2)[:200])
+                self._set_error(_('Nexi errore. Riprova.'))
                 raise
 
     def _get_specific_rendering_values(self, processing_values):
@@ -456,7 +513,8 @@ class PaymentTransactionNexi(models.Model):
         try:
             data = self._nexi_post_order(provider, url, payload, want_save)
         except ValidationError as e:
-            self._set_error(str(e))
+            _logger.warning('Nexi ordine %s KO: %s', self.reference, str(e)[:200])
+            self._set_error(_('Nexi errore. Riprova.'))
             raise
 
         hosted = (data or {}).get('hostedPage') or (data or {}).get('hostedpage')
@@ -500,7 +558,8 @@ class PaymentTransactionNexi(models.Model):
         try:
             data = self._nexi_post_order(provider, build_url, build_payload, want_save)
         except ValidationError as e:
-            self._set_error(str(e))
+            _logger.warning('Nexi ordine %s KO: %s', self.reference, str(e)[:200])
+            self._set_error(_('Nexi errore. Riprova.'))
             raise
         # L'ordine dei soli bottoni (-m) non deve sovrascrivere la sessione
         # dei campi carta: finalize deve usare quella giusta.
@@ -516,7 +575,7 @@ class PaymentTransactionNexi(models.Model):
         res.update(
             nexi_build=True,
             build_data=data,
-            build_fields=(data or {}).get('fields') or [],
+            build_fields=_nexi_safe_fields((data or {}).get('fields')),
             build_url=(data or {}).get('url') or False,
             build_state=(data or {}).get('state') or False,
             nexi_sdk=host + '/monetaweb/resources/hfsdk.js',
@@ -585,10 +644,13 @@ class PaymentTransactionNexi(models.Model):
             # Decide l'ultima operazione: con l'incasso automatico Nexi manda
             # AUTHORIZATION + CAPTURE e l'esito vero sta sull'incasso.
             op, op_kind = _nexi_decide_operation(data)
+            # L'ordine da verificare lo decide la transazione; la risposta deve
+            # però riferirsi a QUESTO ordine. Se manca l'id non posso dirlo:
+            # fail-closed, non "fidati".
             got_order = (data.get('orderId')
                          or (data.get('orderStatus') or {}).get('order', {}).get('orderId')
                          or '')
-            if got_order and got_order != order_ref:
+            if not got_order or got_order != order_ref:
                 self._set_error('Ritorno Nexi non valido.')
                 return
             result = ((op or {}).get('operationResult') or '').upper()

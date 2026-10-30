@@ -108,6 +108,30 @@ class TestNexiReview(TransactionCase):
             tx._process_notification_data({})
         self.assertEqual(tx.state, 'done', 'incassato: non deve finire in errore')
 
+    def test_wrong_order_id_is_refused(self):
+        """La risposta deve riferirsi a QUESTO ordine."""
+        tx = self._new_tx()
+        data = self._nexi_answer(
+            'ALTRO-ORDINE', 1000,
+            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
+        )
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
+            tx._process_notification_data({})
+        self.assertEqual(tx.state, 'error')
+
+    def test_missing_order_id_is_refused(self):
+        """Senza orderId non posso dire che sia il mio: fail-closed."""
+        tx = self._new_tx()
+        data = self._nexi_answer(
+            tx.reference, 1000,
+            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
+        )
+        data.pop('orderId', None)
+        data['orderStatus'].pop('order', None)
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
+            tx._process_notification_data({})
+        self.assertEqual(tx.state, 'error')
+
     def test_authorization_only_stays_pending(self):
         tx = self._new_tx()
         data = self._nexi_answer(

@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
 """Ritorno da Nexi. URL breve, una sola cosa: trova la transazione e falla verificare."""
+import hashlib
 import json
 import logging
 import time
 
 from odoo import http
 from odoo.http import request
+from odoo.exceptions import ValidationError
+
+from ..models.payment_transaction import _nexi_safe_fields
 
 _logger = logging.getLogger(__name__)
 
@@ -22,10 +26,17 @@ NOTIFY_LIMIT = 60
 
 def _nexi_rl_allow(key, limit, window=60):
     now = time.time()
-    # Tetto alle chiavi: niente crescita senza fine.
     if len(_NEXI_RL) > 2000:
-        for _k in list(_NEXI_RL)[:1000]:
-            _NEXI_RL.pop(_k, None)
+        # Butto solo i secchielli SCADUTI: prima si cancellavano i 1000 più
+        # vecchi, così chiunque poteva azzerare i contatori degli altri
+        # riempiendo il dizionario con chiavi nuove.
+        expired = [k for k, v in _NEXI_RL.items() if not v or now - v[-1] >= window]
+        for k in expired[:2000]:
+            _NEXI_RL.pop(k, None)
+        if len(_NEXI_RL) > 4000:
+            # Troppe chiavi attive anche dopo la pulizia: meglio rifiutare che
+            # crescere senza limite.
+            return False
     lst = [t for t in (_NEXI_RL.get(key) or []) if now - t < window]
     if len(lst) >= limit:
         _NEXI_RL[key] = lst
@@ -33,6 +44,11 @@ def _nexi_rl_allow(key, limit, window=60):
     lst.append(now)
     _NEXI_RL[key] = lst
     return True
+
+
+def _nexi_rl_bucket(value, size=32):
+    """Parte di chiave a dimensione fissa: il chiamante non decide lo spazio."""
+    return hashlib.sha256(str(value or '').encode('utf-8', 'replace')).hexdigest()[:size]
 
 
 def _nexi_rl_key(name):
@@ -60,7 +76,9 @@ def _nexi_confirm_limit(is_notify, kw):
     invece resta per IP, perché lì è un cliente per volta.
     """
     if is_notify:
-        return 'nexi:notify:%s' % ((kw or {}).get('tok') or '-'), NOTIFY_LIMIT
+        # Chiave a dimensione fissa: il tok lo sceglie il chiamante, non deve
+        # decidere quanto occupa in memoria né quanto vive il secchiello.
+        return 'nexi:notify:%s' % _nexi_rl_bucket((kw or {}).get('tok')), NOTIFY_LIMIT
     return _nexi_rl_key('confirm'), BROWSER_LIMIT
 
 
@@ -144,7 +162,9 @@ class NexiController(http.Controller):
             # Metodo di website_sale: carrello pronto + spedizione valida.
             order._check_cart_is_ready_to_be_paid()
         except Exception as e:
-            return (str(e) or 'Ordine non valido.')[:200]
+            # Al browser solo i messaggi previsti: il resto (testo di un modulo
+            # terzo, errore ORM) resta nel log, come per tutti gli altri errori.
+            return _nexi_public_error(e)
         compare = order.currency_id.compare_amounts
         if compare(order.amount_paid, order.amount_total) == 0:
             return 'Ordine già pagato.'
@@ -238,7 +258,11 @@ class NexiController(http.Controller):
                 body = json.loads(request.httprequest.get_data() or '{}')
             except Exception:
                 body = {}
-            order = body.get('orderId') or (body.get('order') or {}).get('orderId')
+            if not isinstance(body, dict):
+                body = {}
+            order = body.get('orderId')
+            if not order and isinstance(body.get('order'), dict):
+                order = body['order'].get('orderId')
             if order:
                 kw['ref'] = order
         try:
@@ -258,19 +282,24 @@ class NexiController(http.Controller):
         notify_data = {'cancel': kw.get('cancel'), 'notify': kw.get('notify')}
         if ref_in == tx.reference + '-m':
             notify_data['nexi_order_ref'] = ref_in
-        # Prima verifico su Nexi (rete), poi blocco la riga solo per la
-        # post-elaborazione: il lock non resta aperto durante le chiamate.
-        tx._process_notification_data(notify_data)
-        # Notifica Nexi e ritorno del browser arrivano insieme: serializzo sulla
-        # riga, altrimenti la post-elaborazione gira due volte (errore sui follower).
+        # Serializzo sulla riga PRIMA di toccare lo stato: in Odoo 18
+        # _update_state() riscrive is_post_processed=False a ogni transizione,
+        # quindi un lock preso dopo lascerebbe passare una seconda
+        # post-elaborazione (notifica + ritorno del browser insieme).
         request.env.cr.execute(
             'SELECT id FROM payment_transaction WHERE id = %s FOR UPDATE', (tx.id,)
         )
         tx.invalidate_recordset()
-        # Senza questo Odoo non conferma l'ordine ne' crea la fattura.
-        # Solo una volta: la notifica Nexi e il ritorno del browser arrivano insieme.
-        if not tx.is_post_processed:
-            tx._post_process()
+        if tx.is_post_processed and tx.state in ('done', 'cancel', 'error'):
+            # Già chiusa e già post-elaborata da un altro flusso: non rifaccio
+            # la verifica né la conferma.
+            _logger.info('Nexi %s già chiusa e post-elaborata: salto.', tx.reference)
+        else:
+            tx._process_notification_data(notify_data)
+            tx.invalidate_recordset()
+            # Senza questo Odoo non conferma l'ordine ne' crea la fattura.
+            if not tx.is_post_processed:
+                tx._post_process()
         # Rotta finale: quella decisa dal flusso (cassa, portale, fattura) va
         # lasciata com'è. Si tocca solo se manca o se punta alla pagina di
         # stato, che altrimenti ricarica in loop.
@@ -468,6 +497,12 @@ class NexiController(http.Controller):
         tx = _nexi_tx_or_404(reference)
         if not tx or not tx.nexi_build_session:
             return request.not_found()
+        # Anche questa rotta spende una chiamata al terminale: la conto come le
+        # altre, altrimenti un cliente può far girare la chiave a vuoto.
+        if not _nexi_rl_allow(_nexi_rl_key('fields'), 30):
+            return request.make_response(
+                json.dumps({'fields': []}), [('Content-Type', 'application/json')], status=429
+            )
         provider = tx.provider_id
         base = provider._nexi_build_url().rsplit('/orders/build', 1)[0]
         try:
@@ -477,11 +512,12 @@ class NexiController(http.Controller):
             )
         except Exception:
             return request.make_response(json.dumps({'fields': []}), [('Content-Type', 'application/json')])
-        # Whitelist: solo id/classe/tipo/src degli iframe, niente operation.
+        # Whitelist: solo id/classe/tipo/src degli iframe, niente operation, e
+        # solo src su dominio Nexi (sono gli iframe in cui si digita la carta).
         out = []
         fs = (data or {}).get('fieldSet') or {}
-        for f in (fs.get('fields') or []):
-            if not isinstance(f, dict) or not f.get('src'):
+        for f in _nexi_safe_fields(fs.get('fields')):
+            if not f.get('src'):
                 continue
             out.append({
                 'id': f.get('id'),
