@@ -444,7 +444,11 @@
     <field name="arch" type="xml">
       <xpath expr="//t[@t-call='payment.method_form']" position="after">
         <t t-set="nexi_prov" t-value="providers_sudo.filtered(lambda p: p.code == 'nexi')[:1]"/>
-        <t t-if="nexi_prov and nexi_prov.nexi_mode == 'build' and provider_sudo.code == 'nexi'">
+        <!-- Il provider della riga va calcolato QUI: `provider_sudo` è un t-set
+             dentro payment.method_form, non esiste in questo template (KeyError
+             a ogni caricamento della cassa). Stessa espressione di Odoo. -->
+        <t t-set="nexi_row_prov" t-value="pm_sudo.provider_ids.filtered(lambda p: p in providers_sudo)[:1]"/>
+        <t t-if="nexi_prov and nexi_prov.nexi_mode == 'build' and nexi_row_prov.code == 'nexi'">
           <t t-if="pm_sudo.code == 'card'">
             <style>
               /* Build: ogni riga Nexi è una pillola grigia con logo + nome, senza
