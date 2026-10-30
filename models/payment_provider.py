@@ -65,7 +65,7 @@ def _classify_nexi_check_error(err):
     status = getattr(err, 'status_code', None)
     if status in (401, 403):
         return 'config'
-    if status and (status == 408 or status == 429 or status >= 500):
+    if status and (status in (408, 429) or status >= 500):
         # Guasto temporaneo (rate limit, gateway giù): non parla del metodo.
         # Va controllato PRIMA dei marcatori, altrimenti un "Service not
         # available" su 503 spegne metodi che funzionano.

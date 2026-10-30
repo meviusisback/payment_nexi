@@ -402,11 +402,22 @@ class SessionChoiceTest(unittest.TestCase):
 class ContractDomainTest(unittest.TestCase):
     """#11: i contratti valgono per il terminale che li ha creati."""
 
-    def test_domain_filters_by_provider(self):
+    def _provider_clause(self, domain):
+        return [d for d in domain if d[0] == 'provider_id']
+
+    def test_domain_restricts_to_the_requested_terminal(self):
+        """L'invariante: il dominio limita i contratti ai terminali chiesti."""
         model = TRANSACTION.PaymentTransactionNexi()
         domain = model._nexi_contract_domain([1, 2], 7)
-        self.assertIn(('provider_id', '=', 7), domain)
+        clause = self._provider_clause(domain)
+        self.assertEqual(len(clause), 1, 'una sola clausola sul provider')
+        self.assertEqual(list(clause[0][2]), [7])
         self.assertIn(('partner_id', 'in', [1, 2]), domain)
+
+    def test_domain_accepts_several_terminals(self):
+        model = TRANSACTION.PaymentTransactionNexi()
+        clause = self._provider_clause(model._nexi_contract_domain([1], [3, 7]))
+        self.assertEqual(sorted(clause[0][2]), [3, 7])
 
     def test_domain_without_provider_keeps_all(self):
         model = TRANSACTION.PaymentTransactionNexi()

@@ -8,6 +8,7 @@ quando Nexi manda anche il CAPTURE, e i metodi nascosti per singolo terminale.
 """
 from unittest.mock import patch
 
+from odoo.exceptions import ValidationError
 from odoo.tests import TransactionCase, tagged
 
 
@@ -217,7 +218,7 @@ class TestNexiReview(TransactionCase):
                 'partner_id': self.partner.id, 'reference': tx.reference,
                 'should_tokenize': False, 'base_url': 'https://shop.example.com'}
         with patch.object(type(tx), '_nexi_post_order') as post:
-            with self.assertRaises(Exception):
+            with self.assertRaises(ValidationError):
                 tx._get_specific_rendering_values(dict(vals))
             self.assertFalse(post.called, 'non deve nemmeno chiamare Nexi')
 

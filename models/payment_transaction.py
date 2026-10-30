@@ -216,7 +216,16 @@ class PaymentTransactionNexi(models.Model):
             ('nexi_contract_id', '!=', False),
         ]
         if provider_id:
-            domain.append(('provider_id', '=', provider_id))
+            # Accetta un id, una lista o un recordset: serve a fare una sola
+            # ricerca quando i terminali sono più di uno.
+            if hasattr(provider_id, 'ids'):
+                ids = list(provider_id.ids)
+            elif isinstance(provider_id, (list, tuple, set)):
+                ids = list(provider_id)
+            else:
+                ids = [provider_id]
+            if ids:
+                domain.append(('provider_id', 'in', ids))
         return domain
 
     def _nexi_contract_for_partner(self, partner_id, provider_id=None):

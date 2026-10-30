@@ -94,6 +94,26 @@ def _nexi_tx_or_404(reference):
     return tx
 
 
+def _nexi_lock_row(cr, tx_id, nowait=True):
+    """Blocca la riga della transazione. Con nowait: False se è già presa.
+
+    La verifica su Nexi può durare decine di secondi: chi arriva secondo non
+    deve mettersi in coda dietro al primo, altrimenti un worker resta fermo
+    quanto la rete. Il savepoint tiene la transazione usabile se il lock non
+    c'è.
+    """
+    sql = (
+        'SELECT id FROM payment_transaction WHERE id = %s FOR UPDATE'
+        + (' NOWAIT' if nowait else '')
+    )
+    try:
+        with cr.savepoint():
+            cr.execute(sql, (tx_id,))
+    except Exception:
+        return False
+    return True
+
+
 def _nexi_landing_route(landing, has_order):
     """Dove mandare il browser dopo il pagamento.
 
@@ -108,7 +128,7 @@ def _nexi_landing_route(landing, has_order):
     return '/shop/payment/validate' if has_order else (landing or '/payment/confirmation')
 
 
-def _nexi_public_error(e):
+def _nexi_public_error(e, source='Nexi'):
     """Al browser solo messaggi sicuri, il resto resta nei log."""
     msg = str(e) or ''
     safe = (
@@ -130,7 +150,7 @@ def _nexi_public_error(e):
     )
     if msg.startswith(safe):
         return msg[:200]
-    _logger.warning('Nexi errore interno: %s', msg[:300])
+    _logger.warning('%s errore interno: %s', source, msg[:300])
     return 'Pagamento non disponibile. Riprova.'
 
 
@@ -164,7 +184,7 @@ class NexiController(http.Controller):
         except Exception as e:
             # Al browser solo i messaggi previsti: il resto (testo di un modulo
             # terzo, errore ORM) resta nel log, come per tutti gli altri errori.
-            return _nexi_public_error(e)
+            return _nexi_public_error(e, source='Carrello')
         compare = order.currency_id.compare_amounts
         if compare(order.amount_paid, order.amount_total) == 0:
             return 'Ordine già pagato.'
@@ -187,6 +207,20 @@ class NexiController(http.Controller):
         except Exception:
             return False
         return True
+
+    def _nexi_lock_tx(self, tx):
+        """Blocca la riga senza aspettare (vedi _nexi_lock_row)."""
+        return _nexi_lock_row(request.env.cr, tx.id)
+
+    def _nexi_finish(self, tx, is_notify):
+        """Risposta finale: notifica -> OK, browser -> pagina di stato."""
+        if is_notify:
+            return 'OK'
+        # Dillo alla pagina di stato: senza questa chiave in sessione
+        # Odoo non trova il pagamento e mostra "in attesa".
+        from odoo.addons.payment.controllers.post_processing import PaymentPostProcessing
+        PaymentPostProcessing.monitor_transaction(tx)
+        return request.redirect('/payment/status')
 
     def _nexi_provider(self, order, mode=None, provider_id=None):
         """Provider Nexi compatibile con l'ordine, l'azienda, il SITO e la valuta.
@@ -232,11 +266,19 @@ class NexiController(http.Controller):
         choice = str(contract_id or '').strip()
         if choice:
             # Vale per il partner, non per l'ordine: così funziona anche per una
-            # fattura pagata dal portale, dove un carrello non esiste.
-            cards = set()
-            Tx = request.env['payment.transaction'].sudo()
-            for prov in request.env['payment.provider'].sudo().search([('code', '=', 'nexi')]):
-                cards.update(c['contract_id'] for c in Tx.get_nexi_saved_cards(partner.id, prov.id))
+            # fattura pagata dal portale, dove un carrello non esiste. Una sola
+            # ricerca per i contratti, e solo i terminali dell'azienda giusta.
+            company_id = order.company_id.id if order else request.env.company.id
+            providers = request.env['payment.provider'].sudo().search([
+                ('code', '=', 'nexi'),
+                ('company_id', 'in', [False, company_id]),
+            ])
+            cards = {
+                c['contract_id']
+                for c in request.env['payment.transaction'].sudo().get_nexi_saved_cards(
+                    partner.id, providers.ids
+                )
+            }
             # Contratto che non è del cliente: vale come "carta nuova".
             choice = choice if choice in cards else ''
         request.session['nexi_saved_contract'] = {
@@ -289,9 +331,14 @@ class NexiController(http.Controller):
         # _update_state() riscrive is_post_processed=False a ogni transizione,
         # quindi un lock preso dopo lascerebbe passare una seconda
         # post-elaborazione (notifica + ritorno del browser insieme).
-        request.env.cr.execute(
-            'SELECT id FROM payment_transaction WHERE id = %s FOR UPDATE', (tx.id,)
-        )
+        #
+        # NOWAIT: la verifica può durare decine di secondi (timeout di rete),
+        # quindi chi arriva secondo non si mette in coda — esce e lascia finire
+        # il primo flusso. Il cliente vede la pagina di stato, che rilegge la
+        # transazione appena l'altro flusso l'ha chiusa.
+        if not self._nexi_lock_tx(tx):
+            _logger.info('Nexi %s: chiusura già in corso in un altro flusso.', tx.reference)
+            return self._nexi_finish(tx, is_notify)
         tx.invalidate_recordset()
         if tx.is_post_processed and tx.state in ('done', 'cancel', 'error'):
             # Già chiusa e già post-elaborata da un altro flusso: non rifaccio
@@ -307,13 +354,7 @@ class NexiController(http.Controller):
         # lasciata com'è. Si tocca solo se manca o se punta alla pagina di
         # stato, che altrimenti ricarica in loop.
         tx.landing_route = _nexi_landing_route(tx.landing_route, bool(tx.sale_order_ids))
-        if is_notify:
-            return 'OK'
-        # Dillo alla pagina di stato: senza questa chiave in sessione
-        # Odoo non trova il pagamento e mostra "in attesa".
-        from odoo.addons.payment.controllers.post_processing import PaymentPostProcessing
-        PaymentPostProcessing.monitor_transaction(tx)
-        return request.redirect('/payment/status')
+        return self._nexi_finish(tx, is_notify)
 
     @http.route('/payment/nexi/build/<string:reference>', type='http', auth='public', website=True, methods=['GET'])
     def nexi_build(self, reference, **kw):
