@@ -52,19 +52,28 @@ class PaymentMethodNexi(models.Model):
         ]):
             refused.setdefault(rec.method_id.id, set()).add(rec.provider_id.id)
 
+        def _row_provider_id(method):
+            """Il provider che Odoo userà nella riga: il primo compatibile.
+
+            In `payment.method_form` la riga prende
+            `pm_sudo.provider_ids.filtered(lambda p: p in providers_sudo)[:1]`,
+            cioè il primo provider compatibile collegato al metodo (ordine per
+            id). Devo decidere su quello, non su "qualcuno lo accetta".
+            """
+            candidates = [p.id for p in method.provider_ids if p.id in compatible_ids]
+            return min(candidates) if candidates else None
+
         def _keep(method):
-            # Un provider NON Nexi compatibile offre il metodo: la riga resta.
-            if any(
-                p.id in compatible_ids and p.id not in nexi_ids
-                for p in method.provider_ids
-            ):
+            row_provider = _row_provider_id(method)
+            if row_provider is None:
                 return True
-            links = [p.id for p in method.provider_ids if p.id in nexi_ids]
-            if not links:
+            if row_provider not in nexi_ids:
+                # Il terminale della riga non è Nexi: la riga non è nostra.
                 return True
             if method.nexi_disabled:
                 return False
-            # Basta un terminale che lo accetta per mostrarlo in cassa.
-            return any(pid not in refused.get(method.id, ()) for pid in links)
+            # Mostro il metodo solo se il terminale che la cassa userà davvero
+            # lo accetta: altrimenti il cliente sceglie una riga che fallisce.
+            return row_provider not in refused.get(method.id, ())
 
         return methods.filtered(_keep)

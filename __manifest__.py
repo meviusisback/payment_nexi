@@ -14,6 +14,7 @@ Carta, Google Pay, Apple Pay, Bancomat Pay, MyBank, PayPal e PayPal Paga in 3.
     'website': 'https://github.com/meviusisback/payment_nexi',
     'license': 'LGPL-3',
     'depends': ['payment', 'website', 'website_sale'],
+    'external_dependencies': {'python': ['requests']},
     'data': [
         'security/ir.model.access.csv',
         'views/payment_nexi_templates.xml',

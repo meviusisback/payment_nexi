@@ -250,6 +250,29 @@ class CheckServiceTest(unittest.TestCase):
     def test_other_services_use_the_default_amount(self):
         self.assertNotIn('CARDS', PROVIDER.CHECK_AMOUNTS)
 
+    def test_temporary_outage_is_not_a_rejection(self):
+        # Un 503 "Service not available" non deve spegnere un metodo valido.
+        for status in (408, 429, 500, 502, 503):
+            err = PROVIDER.NexiApiError('Nexi: Service not available', status_code=status)
+            self.assertEqual(
+                PROVIDER._classify_nexi_check_error(err), 'unknown',
+                'status %s classificato come rifiuto' % status,
+            )
+
+    def test_rejection_on_400_is_still_a_rejection(self):
+        err = PROVIDER.NexiApiError('Nexi: paymentService not enabled', status_code=400)
+        self.assertEqual(PROVIDER._classify_nexi_check_error(err), 'disabled')
+
+    def test_check_order_id_fits_nexi_limit(self):
+        """Nexi accetta orderId fino a 27 caratteri: la verifica deve stare sotto."""
+        class Ok(PROVIDER.PaymentProviderNexi):
+            def _nexi_make_request(self, http_method, url, payload=None, params=None):
+                Ok.last = payload
+                return {}
+        for service in ('CARDS', 'PAYPAL_PAGAIN3', 'BANCOMATPAY', 'GOOGLEPAY'):
+            Ok()._nexi_check_service('https://xpay.nexigroup.com/orders/hpp', service)
+            ref = Ok.last['order']['orderId']
+            self.assertLessEqual(len(ref), 27, '%s: %s' % (service, ref))
     def test_bad_credentials_stop_the_check(self):
         """401/403 non è un metodo spento: è la chiave sbagliata."""
         err = PROVIDER.NexiApiError('Nexi: unauthorized', status_code=401)
@@ -379,11 +402,22 @@ class SessionChoiceTest(unittest.TestCase):
 class ContractDomainTest(unittest.TestCase):
     """#11: i contratti valgono per il terminale che li ha creati."""
 
-    def test_domain_filters_by_provider(self):
+    def _provider_clause(self, domain):
+        return [d for d in domain if d[0] == 'provider_id']
+
+    def test_domain_restricts_to_the_requested_terminal(self):
+        """L'invariante: il dominio limita i contratti ai terminali chiesti."""
         model = TRANSACTION.PaymentTransactionNexi()
         domain = model._nexi_contract_domain([1, 2], 7)
-        self.assertIn(('provider_id', '=', 7), domain)
+        clause = self._provider_clause(domain)
+        self.assertEqual(len(clause), 1, 'una sola clausola sul provider')
+        self.assertEqual(list(clause[0][2]), [7])
         self.assertIn(('partner_id', 'in', [1, 2]), domain)
+
+    def test_domain_accepts_several_terminals(self):
+        model = TRANSACTION.PaymentTransactionNexi()
+        clause = self._provider_clause(model._nexi_contract_domain([1], [3, 7]))
+        self.assertEqual(sorted(clause[0][2]), [3, 7])
 
     def test_domain_without_provider_keeps_all(self):
         model = TRANSACTION.PaymentTransactionNexi()
@@ -414,6 +448,116 @@ class LandingRouteTest(unittest.TestCase):
             CONTROLLER._nexi_landing_route('', False), '/payment/confirmation'
         )
 
+
+class UrlAllowlistTest(unittest.TestCase):
+    """Audit SEC1: il parser di Python e quello del client HTTP devono
+    leggere lo stesso host, altrimenti la X-Api-Key esce dal dominio Nexi."""
+
+    def test_backslash_before_at_is_refused(self):
+        # urlparse legge xpay.nexigroup.com, requests chiama evil.tld: rifiuto.
+        for url in (
+            'https://evil.tld\\@xpay.nexigroup.com/psp/api/v1/orders/hpp',
+            'https://evil.tld:443\\@xpay.nexigroup.com/x',
+            'https://evil\\@xpay.nexigroup.com/x',
+        ):
+            self.assertFalse(PROVIDER.is_nexi_url(url), url)
+
+    def test_userinfo_is_refused(self):
+        self.assertFalse(PROVIDER.is_nexi_url('https://user:pw@xpay.nexigroup.com/x'))
+
+    def test_odd_port_is_refused(self):
+        self.assertFalse(PROVIDER.is_nexi_url('https://xpay.nexigroup.com:8443/x'))
+
+    def test_plain_hosts_still_pass(self):
+        self.assertTrue(PROVIDER.is_nexi_url('https://xpay.nexigroup.com/x'))
+        self.assertTrue(PROVIDER.is_nexi_url('https://xpay.nexigroup.com:443/x'))
+
+    def test_request_guard_refuses_to_send_the_key(self):
+        # _nexi_make_request non deve nemmeno partire con un URL non Nexi.
+        class Fake(PROVIDER.PaymentProviderNexi):
+            nexi_api_key = 'chiave-di-prova'
+
+            def ensure_one(self):
+                return self
+        with self.assertRaises(PROVIDER.ValidationError):
+            Fake()._nexi_make_request('GET', 'https://evil.tld\\@xpay.nexigroup.com/x')
+
+
+class SafeFieldsTest(unittest.TestCase):
+    """Audit D1/B6: gli iframe dei campi carta solo da host Nexi."""
+
+    def test_foreign_src_is_dropped(self):
+        fields = [
+            {'id': 'CARD_NUMBER', 'src': 'https://xpay.nexigroup.com/field/1'},
+            {'id': 'SECURITY_CODE', 'src': 'https://attacker.tld/card.html'},
+            {'id': 'BAD', 'src': 'data:text/html,<form>'},
+            {'id': 'NO_SRC'},
+            'non un dict',
+        ]
+        kept = TRANSACTION._nexi_safe_fields(fields)
+        self.assertEqual([f['id'] for f in kept], ['CARD_NUMBER'])
+
+    def test_empty_is_fine(self):
+        self.assertEqual(TRANSACTION._nexi_safe_fields(None), [])
+
+
+class OperationTimeTest(unittest.TestCase):
+    """Audit B5: operationTime non si confronta come stringa."""
+
+    def _data(self, *ops):
+        return {'operations': [dict(operationType=t, operationResult=r, operationTime=ts)
+                               for t, r, ts in ops]}
+
+    def test_unpadded_hour_does_not_beat_later_time(self):
+        # 'T9:00:00' > 'T10:00:00' come stringa: qui deve vincere l'autorizzazione.
+        data = self._data(
+            ('AUTHORIZATION', 'EXECUTED', '2026-10-30T10:00:00'),
+            ('CAPTURE', 'CANCELED', '2026-10-30T9:00:00'),
+        )
+        op, kind = TRANSACTION._nexi_decide_operation(data)
+        self.assertEqual(kind, 'auth')
+        self.assertEqual(op['operationResult'], 'EXECUTED')
+
+    def test_missing_time_prefers_the_authorization(self):
+        data = self._data(
+            ('AUTHORIZATION', 'AUTHORIZED', None),
+            ('CAPTURE', 'EXECUTED', None),
+        )
+        op, kind = TRANSACTION._nexi_decide_operation(data)
+        self.assertEqual(kind, 'auth')
+        self.assertEqual(op['operationResult'], 'AUTHORIZED')
+
+    def test_capture_only_still_decides(self):
+        op, kind = TRANSACTION._nexi_decide_operation(
+            self._data(('CAPTURE', 'EXECUTED', None))
+        )
+        self.assertEqual(kind, 'capture')
+        self.assertEqual(op['operationResult'], 'EXECUTED')
+
+
+class RateLimitBucketTest(unittest.TestCase):
+    """Audit A1: la chiave del secchiello non la detta il chiamante."""
+
+    def setUp(self):
+        CONTROLLER._NEXI_RL.clear()
+
+    def test_bucket_has_fixed_size(self):
+        big = CONTROLLER._nexi_rl_bucket('x' * 10000)
+        self.assertEqual(len(big), 32)
+        self.assertNotEqual(big, CONTROLLER._nexi_rl_bucket('y' * 10000))
+
+    def test_notify_key_does_not_contain_the_raw_token(self):
+        key, _limit = CONTROLLER._nexi_confirm_limit(True, {'tok': 'segreto-in-chiaro'})
+        self.assertNotIn('segreto', key)
+
+    def test_flooding_keys_does_not_wipe_a_live_bucket(self):
+        now = CONTROLLER.time.time()
+        CONTROLLER._NEXI_RL['nexi:prepare:mio-ip'] = [now]
+        for i in range(2500):
+            CONTROLLER._NEXI_RL['nexi:notify:%032d' % i] = [now]
+        CONTROLLER._nexi_rl_allow('nexi:fields:altro', 30)
+        self.assertIn('nexi:prepare:mio-ip', CONTROLLER._NEXI_RL,
+                      'un flood non deve azzerare i contatori degli altri')
 
 if __name__ == '__main__':
     unittest.main()

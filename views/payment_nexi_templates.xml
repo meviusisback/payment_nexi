@@ -50,6 +50,16 @@
             var e = document.getElementById('nexi-build-error');
             e.textContent = msg; e.classList.remove('d-none');
           }
+          // Nessuna navigazione verso URL che non siano Nexi: il valore può
+          // arrivare dall'SDK o da una risposta alterata.
+          function nexiUrlOk(u) {
+            try {
+              var x = new URL(u, window.location.href);
+              if (x.protocol !== 'https:') { return false; }
+              var h = x.hostname.toLowerCase();
+              return h === 'xpay.nexigroup.com' || h === 'xpaysandbox.nexigroup.com';
+            } catch (e) { return false; }
+          }
           function iframeFor(f, height) {
             var i = document.createElement('iframe');
             i.src = f.src; i.scrolling = 'no';
@@ -68,7 +78,7 @@
               onBuildFlowStateChange: function (evtData, workflowState) {
                 var d = evtData || {};
                 var state = d.state || workflowState || '';
-                if (d.url) { window.location.href = d.url; return; }
+                if (d.url) { if (!nexiUrlOk(d.url)) { fail('Risposta Nexi non valida.'); return; } window.location.href = d.url; return; }
                 if (d.fieldSet &amp;&amp; d.fieldSet.fields) {
                   var box = document.getElementById('nexi-build-fields');
                   box.innerHTML = '';
@@ -95,7 +105,7 @@
             ).then(function (res) {
               var r = (res &amp;&amp; res.result) || res || {};
               if (r.error) { fail('Nexi: ' + r.error); return; }
-              if (r.url) { window.location.href = r.url; return; }
+              if (r.url) { if (!nexiUrlOk(r.url)) { fail('Risposta Nexi non valida.'); return; } window.location.href = r.url; return; }
               window.location.href = CONFIRM_URL;
             }).catch(function () { fail('Conferma non riuscita. Riprova.'); });
           }
@@ -144,6 +154,16 @@
             var e = document.getElementById('nexi-build-error');
             e.textContent = msg; e.classList.remove('d-none');
           }
+          // Nessuna navigazione verso URL che non siano Nexi: il valore può
+          // arrivare dall'SDK o da una risposta alterata.
+          function nexiUrlOk(u) {
+            try {
+              var x = new URL(u, window.location.href);
+              if (x.protocol !== 'https:') { return false; }
+              var h = x.hostname.toLowerCase();
+              return h === 'xpay.nexigroup.com' || h === 'xpaysandbox.nexigroup.com';
+            } catch (e) { return false; }
+          }
           function iframeFor(f, height) {
             var i = document.createElement('iframe');
             i.src = f.src; i.scrolling = 'no';
@@ -180,7 +200,7 @@
               onBuildFlowStateChange: function (evtData, workflowState) {
                 var d = evtData || {};
                 var state = d.state || workflowState || '';
-                if (d.url) { window.location.href = d.url; return; }
+                if (d.url) { if (!nexiUrlOk(d.url)) { fail('Risposta Nexi non valida.'); return; } window.location.href = d.url; return; }
                 if (d.fieldSet &amp;&amp; d.fieldSet.fields) {
                   var box = document.getElementById('nexi-build-fields');
                   box.innerHTML = '';
@@ -207,7 +227,7 @@
             ).then(function (res) {
               var r = (res &amp;&amp; res.result) || res || {};
               if (r.error) { fail('Nexi: ' + r.error); return; }
-              if (r.url) { window.location.href = r.url; return; }
+              if (r.url) { if (!nexiUrlOk(r.url)) { fail('Risposta Nexi non valida.'); return; } window.location.href = r.url; return; }
               window.location.href = CONFIRM_URL;
             }).catch(function () { fail('Conferma non riuscita. Riprova.'); });
           }
@@ -313,13 +333,43 @@
             (function () {
               // Il form di Odoo non porta campi suoi fino al provider: la scelta
               // la salvo in sessione e il server la rilegge quando crea l'ordine.
+              var pending = 0;
               function send(contract) {
-                fetch('/payment/nexi/saved-card', {
+                pending += 1;
+                return fetch('/payment/nexi/saved-card', {
                   method: 'POST',
                   headers: {'Content-Type': 'application/json'},
                   body: JSON.stringify({jsonrpc: '2.0', id: 1, params: {contract_id: contract || ''}}),
-                }).catch(function () {});
+                }).catch(function () {}).then(function () { pending -= 1; });
               }
+              // Non lascio partire il pagamento mentre la scelta sta ancora
+              // viaggiando: altrimenti la transazione legge quella precedente.
+              function whenSaved(cb) {
+                if (!pending) { cb(); return; }
+                var t0 = Date.now();
+                (function loop() {
+                  if (!pending || Date.now() - t0 > 3000) { cb(); return; }
+                  setTimeout(loop, 40);
+                })();
+              }
+              document.addEventListener('submit', function (ev) {
+                if (!pending) { return; }
+                ev.preventDefault();
+                ev.stopImmediatePropagation();
+                var form = ev.target;
+                whenSaved(function () {
+                  if (form.requestSubmit) { form.requestSubmit(); } else { form.submit(); }
+                });
+              }, true);
+              document.addEventListener('click', function (ev) {
+                var b = ev.target &amp;&amp; ev.target.closest
+                  ? ev.target.closest('button[type="submit"], button[name="o_payment_submit_button"]')
+                  : null;
+                if (!b || !pending) { return; }
+                ev.preventDefault();
+                ev.stopImmediatePropagation();
+                whenSaved(function () { b.click(); });
+              }, true);
               document.addEventListener('change', function (ev) {
                 if (!ev.target.classList || !ev.target.classList.contains('nexi-saved-radio')) return;
                 // Selezionare una carta sceglie anche la riga Carta.
@@ -355,7 +405,6 @@
       <xpath expr="//group[@name='provider_credentials']" position="inside">
         <field name="nexi_api_key" password="True"/>
         <field name="nexi_env"/>
-        <field name="nexi_capture"/>
         <field name="nexi_mode"/>
         <field name="nexi_payment_service" placeholder="Vuoto=tutti, es. GOOGLEPAY"/>
         <field name="nexi_oneclick"/>
@@ -395,7 +444,7 @@
     <field name="arch" type="xml">
       <xpath expr="//t[@t-call='payment.method_form']" position="after">
         <t t-set="nexi_prov" t-value="providers_sudo.filtered(lambda p: p.code == 'nexi')[:1]"/>
-        <t t-if="nexi_prov and nexi_prov.nexi_mode == 'build'">
+        <t t-if="nexi_prov and nexi_prov.nexi_mode == 'build' and provider_sudo.code == 'nexi'">
           <t t-if="pm_sudo.code == 'card'">
             <style>
               /* Build: ogni riga Nexi è una pillola grigia con logo + nome, senza
@@ -568,6 +617,16 @@
                 var e = document.getElementById('nexi-inline-error');
                 if (e) { e.textContent = msg; e.classList.remove('d-none'); }
               }
+              // Nessuna navigazione verso URL che non siano Nexi: il valore può
+              // arrivare dall'SDK o da una risposta alterata.
+              function nexiUrlOk(u) {
+                try {
+                  var x = new URL(u, window.location.href);
+                  if (x.protocol !== 'https:') { return false; }
+                  var h = x.hostname.toLowerCase();
+                  return h === 'xpay.nexigroup.com' || h === 'xpaysandbox.nexigroup.com';
+                } catch (e) { return false; }
+              }
               function iframeFor(f, height) {
                 var i = document.createElement('iframe');
                 i.src = f.src; i.scrolling = 'no';
@@ -583,6 +642,7 @@
               function loadSdk(src, cb) {
                 if (window.Build) return cb();
                 var s = document.createElement('script');
+                if (!nexiUrlOk(src)) { return; }
                 s.src = src; s.onload = cb;
                 s.onerror = function () { fail('SDK Nexi non caricato. Riprova.'); };
                 document.head.appendChild(s);
@@ -674,7 +734,7 @@
                       var d = evtData || {};
                       var state = d.state || workflowState || '';
                       var box = document.getElementById('nexi-inline');
-                      if (d.url) { window.location.href = d.url; return; }
+                      if (d.url) { if (!nexiUrlOk(d.url)) { fail('Risposta Nexi non valida.'); return; } window.location.href = d.url; return; }
                       if (state === 'READY_FOR_PAYMENT') { finalize(box); }
                       if (state === 'PAYMENT_COMPLETE') { window.location.href = box.dataset.confirm; }
                     },
@@ -770,7 +830,7 @@
                 ).then(function (res) {
                   var r = (res &amp;&amp; res.result) || res || {};
                   if (r.error) { fail('Nexi: ' + r.error); return; }
-                  if (r.url) { window.location.href = r.url; return; }
+                  if (r.url) { if (!nexiUrlOk(r.url)) { fail('Risposta Nexi non valida.'); return; } window.location.href = r.url; return; }
                   window.location.href = box.dataset.confirm;
                 }).catch(function () { fail('Conferma non riuscita. Riprova.'); });
               }
@@ -811,7 +871,7 @@
                 }).then(function (r) { return r.json(); }
                 ).then(function (res) {
                   var r = (res &amp;&amp; res.result) || res || {};
-                  if (r.url) { window.location.href = r.url; return; }
+                  if (r.url) { if (!nexiUrlOk(r.url)) { fail('Risposta Nexi non valida.'); return; } window.location.href = r.url; return; }
                   delete apm.dataset.busy;
                   if (r.hide) { row.style.setProperty('display', 'none', 'important'); }
                   toast(r.error || 'Metodo non disponibile. Riprova.');
