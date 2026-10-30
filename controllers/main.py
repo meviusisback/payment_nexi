@@ -238,9 +238,14 @@ class NexiController(http.Controller):
                             'sale_order_ids': [(6, 0, [order.id])],
                         })
                     break
-                except Exception:
+                except Exception as e:
                     # Riferimento gia' preso da una richiesta parallela: riprovo.
+                    # Loggo sempre: un errore nascosto qui spegne tutta la cassa.
+                    _logger.warning(
+                        'prepare: tx %s non creata (tentativo %s/5): %s',
+                        ref, _i + 1, str(e)[:200])
                     tx = None
+                    time.sleep(0.05 * (_i + 1))
                     continue
             if not tx:
                 tx = Tx.search([
