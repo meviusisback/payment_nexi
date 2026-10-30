@@ -250,6 +250,27 @@ class CheckServiceTest(unittest.TestCase):
     def test_other_services_use_the_default_amount(self):
         self.assertNotIn('CARDS', PROVIDER.CHECK_AMOUNTS)
 
+    def test_bad_credentials_stop_the_check(self):
+        """401/403 non è un metodo spento: è la chiave sbagliata."""
+        err = PROVIDER.NexiApiError('Nexi: unauthorized', status_code=401)
+        self.assertEqual(PROVIDER._classify_nexi_check_error(err), 'config')
+        with self.assertRaises(PROVIDER.NexiUnavailable):
+            self._provider(err)._nexi_check_service(
+                'https://xpay.nexigroup.com/orders/hpp', 'CARDS'
+            )
+
+    def test_server_error_is_not_a_rejection(self):
+        err = PROVIDER.NexiApiError('Nexi: boom', status_code=500)
+        self.assertEqual(PROVIDER._classify_nexi_check_error(err), 'unknown')
+
+    def test_missing_configuration_is_a_config_error(self):
+        err = PROVIDER.ValidationError('Manca URL Nexi. Metti URL test/produzione.')
+        self.assertEqual(PROVIDER._classify_nexi_check_error(err), 'config')
+
+    def test_network_error_is_not_a_config_error(self):
+        err = PROVIDER.NexiUnavailable('Nexi non raggiungibile. Riprova.')
+        self.assertEqual(PROVIDER._classify_nexi_check_error(err), 'unknown')
+
 
 class DecideOperationTest(unittest.TestCase):
     """#2: con l'incasso automatico l'esito sta sull'ultima operazione."""
@@ -368,6 +389,30 @@ class ContractDomainTest(unittest.TestCase):
         model = TRANSACTION.PaymentTransactionNexi()
         domain = model._nexi_contract_domain([1])
         self.assertFalse([d for d in domain if d[0] == 'provider_id'])
+
+
+class LandingRouteTest(unittest.TestCase):
+    """#12: la rotta del flusso resta quella, senza loop di polling."""
+
+    def test_shop_order_goes_to_checkout_validate(self):
+        self.assertEqual(
+            CONTROLLER._nexi_landing_route('/payment/status', True),
+            '/shop/payment/validate',
+        )
+        self.assertEqual(
+            CONTROLLER._nexi_landing_route('', True), '/shop/payment/validate'
+        )
+
+    def test_portal_route_is_kept(self):
+        invoice = '/my/invoices/42?tx_id=1&access_token=x'
+        self.assertEqual(CONTROLLER._nexi_landing_route(invoice, False), invoice)
+        self.assertEqual(CONTROLLER._nexi_landing_route(invoice, True), invoice)
+
+    def test_portal_without_route_does_not_jump_to_the_shop(self):
+        # Pagamento senza ordine: non esiste una cassa da validare.
+        self.assertEqual(
+            CONTROLLER._nexi_landing_route('', False), '/payment/confirmation'
+        )
 
 
 if __name__ == '__main__':

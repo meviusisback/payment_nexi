@@ -39,6 +39,44 @@ class NexiUnavailable(ValidationError):
     """
 
 
+class NexiApiError(ValidationError):
+    """Nexi ha risposto con un errore suo: stato HTTP e codice gateway.
+
+    Servono a distinguere un metodo spento sul terminale (400 con
+    "paymentService not enabled") da una chiave o un URL sbagliati (401/403)
+    e da un guasto temporaneo (429/5xx).
+    """
+
+    def __init__(self, message, status_code=None, gateway_code=None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.gateway_code = gateway_code
+
+
+def _classify_nexi_check_error(err):
+    """'config' | 'disabled' | 'unknown' per la verifica dei metodi.
+
+    - ``config``: chiave o URL sbagliati (401/403, oppure i nostri messaggi di
+      configurazione) → fermare la verifica e dirlo all'admin.
+    - ``disabled``: Nexi ha detto che il servizio non è attivo su questo
+      terminale → spegnere il metodo.
+    - ``unknown``: guasto temporaneo o risposta mai vista → non toccare niente.
+    """
+    status = getattr(err, 'status_code', None)
+    if status in (401, 403):
+        return 'config'
+    msg = str(err) or ''
+    low = msg.lower()
+    if any(k in low for k in (
+        'manca url', 'manca la x-api-key', 'x-api-key', 'url nexi non valido',
+        'serve https su un dominio nexi',
+    )):
+        return 'config'
+    if any(marker in low for marker in REJECTION_MARKERS):
+        return 'disabled'
+    return 'unknown'
+
+
 def is_nexi_url(url):
     """True solo per https su un dominio Nexi.
 
@@ -69,6 +107,17 @@ def _nexi_error_detail(resp):
     except (ValueError, AttributeError):
         pass
     return 'errore. Riprova.'
+
+
+def _nexi_error_code(resp):
+    """Codice errore Nexi, se la risposta ne porta uno."""
+    try:
+        errs = (resp.json() or {}).get('errors') or []
+        if errs and isinstance(errs[0], dict):
+            return str(errs[0].get('code') or '')[:16] or None
+    except (ValueError, AttributeError):
+        pass
+    return None
 
 
 class PaymentProviderNexi(models.Model):
@@ -190,8 +239,14 @@ class PaymentProviderNexi(models.Model):
             # Rete o timeout: non dice niente sul metodo.
             return None, 'non verificato (%s)' % str(e)[:80]
         except ValidationError as e:
-            msg = str(e).lower()
-            if any(marker in msg for marker in REJECTION_MARKERS):
+            kind = _classify_nexi_check_error(e)
+            if kind == 'config':
+                # Chiave o URL sbagliati: ogni metodo fallirebbe per lo stesso
+                # motivo, quindi fermo la verifica invece di spegnerli tutti.
+                raise NexiUnavailable(_(
+                    'Verifica metodi interrotta: controlla X-Api-Key e URL Nexi (%s).'
+                ) % str(e)[:120])
+            if kind == 'disabled':
                 return False, 'rifiutato dal terminale'
             # Errore che non parla del metodo: non lo spengo.
             return None, 'errore (%s)' % str(e)[:80]
@@ -295,7 +350,11 @@ class PaymentProviderNexi(models.Model):
             resp.raise_for_status()
         except requests.exceptions.HTTPError:
             _logger.error('Nexi %s %s -> %s', method, url, (resp.text or '')[:500])
-            raise ValidationError(_('Nexi: %s') % _nexi_error_detail(resp))
+            raise NexiApiError(
+                _('Nexi: %s') % _nexi_error_detail(resp),
+                status_code=resp.status_code,
+                gateway_code=_nexi_error_code(resp),
+            )
         try:
             return resp.json() if resp.text else {}
         except ValueError:

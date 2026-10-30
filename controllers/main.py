@@ -76,6 +76,20 @@ def _nexi_tx_or_404(reference):
     return tx
 
 
+def _nexi_landing_route(landing, has_order):
+    """Dove mandare il browser dopo il pagamento.
+
+    La rotta decisa dal flusso (cassa, portale, fattura) resta com'è: solo se
+    manca o punta alla pagina di stato la sostituiamo, altrimenti il polling
+    ricarica all'infinito. Per un ordine del negozio la meta è la validazione
+    della cassa; per un pagamento senza ordine (fattura, portale) non c'è una
+    cassa da validare, quindi si lascia la rotta originale.
+    """
+    if landing and not str(landing).startswith('/payment/status'):
+        return landing
+    return '/shop/payment/validate' if has_order else (landing or '/payment/confirmation')
+
+
 def _nexi_public_error(e):
     """Al browser solo messaggi sicuri, il resto resta nei log."""
     msg = str(e) or ''
@@ -85,10 +99,16 @@ def _nexi_public_error(e):
         'Manca la X-Api-Key',
         'Build vuole URL pubblico',
         'Metodo Nexi non valido',
-        'Ordine non valido',
-        'Build non attiva',
+        'Metodo non disponibile su questo terminale',
         'Metodo carta mancante',
+        'Ordine non valido',
+        'Ordine già pagato',
+        'Build non attiva',
         'Troppe richieste',
+        'Il tuo carrello non è pronto',
+        'Your cart is not ready',
+        'No shipping method is selected',
+        'The delivery method is not compatible',
     )
     if msg.startswith(safe):
         return msg[:200]
@@ -148,7 +168,7 @@ class NexiController(http.Controller):
             return False
         return True
 
-    def _nexi_provider(self, order, mode=None):
+    def _nexi_provider(self, order, mode=None, provider_id=None):
         """Provider Nexi compatibile con questo ordine, azienda, sito e valuta.
 
         Le regole sono quelle di Odoo (azienda, stato, pubblicazione, paese,
@@ -162,7 +182,11 @@ class NexiController(http.Controller):
         providers = providers.filtered(lambda p: p.code == 'nexi')
         if mode:
             providers = providers.filtered(lambda p: p.nexi_mode == mode)
-        if len(providers) > 1:
+        if provider_id:
+            # Il provider chiesto dal browser vale solo se è fra i compatibili:
+            # un id inventato non deve scegliere il terminale.
+            providers = providers.filtered(lambda p: p.id == provider_id)
+        elif len(providers) > 1:
             _logger.warning(
                 'Nexi: %s provider compatibili con l\'ordine %s (%s), uso il primo '
                 'per sequenza. Configura un solo provider per sito.',
@@ -250,8 +274,7 @@ class NexiController(http.Controller):
         # Rotta finale: quella decisa dal flusso (cassa, portale, fattura) va
         # lasciata com'è. Si tocca solo se manca o se punta alla pagina di
         # stato, che altrimenti ricarica in loop.
-        if not tx.landing_route or tx.landing_route.startswith('/payment/status'):
-            tx.landing_route = '/shop/payment/validate'
+        tx.landing_route = _nexi_landing_route(tx.landing_route, bool(tx.sale_order_ids))
         if is_notify:
             return 'OK'
         # Dillo alla pagina di stato: senza questa chiave in sessione
@@ -278,7 +301,7 @@ class NexiController(http.Controller):
         })
 
     @http.route('/payment/nexi/build/prepare', type='json', auth='public', website=True, methods=['POST'], csrf=False)
-    def nexi_build_prepare(self, method_code='card', tokenize=False, **kw):
+    def nexi_build_prepare(self, method_code='card', tokenize=False, provider_id=None, **kw):
         """Crea transazione + ordine Build e ridà campi o URL APM."""
         if not _nexi_rl_allow(_nexi_rl_key('prepare'), 20):
             return {'error': 'Troppe richieste. Riprova tra un minuto.'}
@@ -290,7 +313,7 @@ class NexiController(http.Controller):
             return {'error': cart_error}
         if (order.currency_id.name or '') != 'EUR':
             return {'error': 'Nexi attiva solo in EUR.'}
-        provider = self._nexi_provider(order, mode='build')
+        provider = self._nexi_provider(order, mode='build', provider_id=provider_id)
         if not provider:
             return {'error': 'Build non attiva.'}
         if not self._nexi_lock_order(order):
@@ -301,6 +324,10 @@ class NexiController(http.Controller):
         )
         if not method:
             return {'error': 'Metodo carta mancante.'}
+        # Il metodo deve essere di QUESTO terminale e non rifiutato da lui:
+        # la riga in cassa è condivisa, il terminale no.
+        if method not in provider.payment_method_ids or method._nexi_is_disabled(provider.id):
+            return {'error': 'Metodo non disponibile su questo terminale.'}
         Tx = request.env['payment.transaction'].sudo()
         # Host con cui il browser naviga (tunnel compreso): ultima spiaggia
         # per merchantUrl, solo se https pubblico. Vale la base configurata.

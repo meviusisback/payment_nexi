@@ -95,6 +95,19 @@ class TestNexiReview(TransactionCase):
             tx._process_notification_data({})
         self.assertEqual(tx.state, 'done')
 
+    def test_capture_without_operation_amount_closes_payment(self):
+        """Sull'incasso l'importo può stare solo su capturedAmount."""
+        tx = self._new_tx()
+        data = self._nexi_answer(
+            tx.reference, 1000,
+            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
+        )
+        for operation in data['operations']:
+            operation.pop('operationAmount', None)
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
+            tx._process_notification_data({})
+        self.assertEqual(tx.state, 'done', 'incassato: non deve finire in errore')
+
     def test_authorization_only_stays_pending(self):
         tx = self._new_tx()
         data = self._nexi_answer(

@@ -17,6 +17,14 @@ class PaymentMethodNexi(models.Model):
              'nella scheda del provider.',
     )
 
+    def _nexi_is_disabled(self, provider_id):
+        """Il metodo è stato rifiutato da questo terminale?"""
+        return bool(self.env['payment.nexi.method.availability'].sudo().search_count([
+            ('provider_id', '=', provider_id),
+            ('method_id', 'in', self.ids),
+            ('disabled', '=', True),
+        ]))
+
     def _get_compatible_payment_methods(
         self, provider_ids, partner_id, currency_id=None, force_tokenization=False,
         is_express_checkout=False, report=None, **kwargs
