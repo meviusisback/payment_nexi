@@ -23,7 +23,7 @@ def post_init_hook(env):
             'code': 'nexi',
             'state': 'disabled',
             'is_published': False,
-            'allow_tokenization': True,
+            'allow_tokenization': False,
             'payment_method_ids': [(6, 0, methods.ids)] if methods else False,
         })
     else:

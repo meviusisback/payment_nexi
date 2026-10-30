@@ -249,6 +249,15 @@
             return code === 'paypal_bnpl' &amp;&amp; amount &lt; 30;
           }
           var MSG = 'PayPal Paga in 3 richiede almeno 30,00 € di ordine.';
+          // Sotto i 30 € la riga non si mostra proprio (come fa Nexi in cassa).
+          function hideBnplRow() {
+            var amount = parseFloat(form.dataset.amount || '0') || 0;
+            if (amount >= 30) { return; }
+            var mark = form.querySelector('.nexi-apm-row[data-method-code="paypal_bnpl"]');
+            var li = mark &amp;&amp; mark.closest ? mark.closest('li[name=o_payment_option]') : null;
+            if (li) { li.style.setProperty('display', 'none', 'important'); }
+          }
+          hideBnplRow();
           // Il "Pay now" sta fuori dal form e Odoo chiama form.submit():
           // l'evento submit non passa, quindi guardo il click a livello pagina.
           document.addEventListener('click', function (ev) {

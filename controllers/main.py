@@ -112,9 +112,12 @@ class NexiController(http.Controller):
             order = body.get('orderId') or (body.get('order') or {}).get('orderId')
             if order:
                 kw['ref'] = order
-        tx = request.env['payment.transaction'].sudo()._get_tx_from_notification_data(
-            'nexi', kw
-        )
+        try:
+            tx = request.env['payment.transaction'].sudo()._get_tx_from_notification_data(
+                'nexi', kw
+            )
+        except Exception:
+            return request.not_found()
         # Solo chi ha il codice della transazione va avanti. Senza codice
         # giusto la risposta e' uguale a "non trovato", senza chiamare Nexi.
         if not tx.nexi_access_token or _nexi_tok() != tx.nexi_access_token:

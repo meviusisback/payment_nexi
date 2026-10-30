@@ -52,13 +52,6 @@ def is_paid(operation_result):
     return operation_result in OK_RESULTS
 
 
-def _parse_amount(value):
-    try:
-        return Decimal(str(value))
-    except (InvalidOperation, ValueError, TypeError):
-        return Decimal('0')
-
-
 def _parse_cents(value):
     """Centesimi interi da risposta Nexi. O numero intero, o niente."""
     try:
@@ -495,18 +488,16 @@ class PaymentTransactionNexi(models.Model):
             if got_order and got_order != order_ref:
                 self._set_error('Ritorno Nexi non valido.')
                 return
-            result = (auth_op or {}).get('operationResult') or ''
+            result = ((auth_op or {}).get('operationResult') or '').upper()
             # Il circuito a volte risponde PENDING per qualche secondo:
             # riprovo invece di dichiarare subito "in attesa".
-            if result and result.upper() not in WAIT_RESULTS:
+            if result and result not in WAIT_RESULTS:
                 break
             if attempt < 2:
                 _time.sleep(1.0)
         if is_paid(result):
             # Controlla importo e valuta prima di chiudere: tutto in centesimi.
             expected = to_cents(self.amount)
-            cur_ok = True
-            masked = False
             op = auth_op or {}
             got_cur = op.get('operationCurrency')
             if got_cur and got_cur != self.currency_id.name:
@@ -520,7 +511,7 @@ class PaymentTransactionNexi(models.Model):
                 or False
             )
             status = (data or {}).get('orderStatus', {}) or {}
-            if not cur_ok or got is None or got < expected:
+            if got is None or got < expected:
                 self._set_error('Nexi importo non valido.')
                 return
             cap = _parse_cents(status.get('capturedAmount', '0'))
