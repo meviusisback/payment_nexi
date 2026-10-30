@@ -498,6 +498,17 @@
                 s.onerror = function () { fail('SDK Nexi non caricato. Riprova.'); };
                 document.head.appendChild(s);
               }
+              // La sessione Nexi invecchia: dopo 10 minuti i campi muoiono
+              // (errori strani anche con dati giusti). Meglio rifarli.
+              function sessionStale() {
+                var box = document.getElementById('nexi-inline');
+                var t = box &amp;&amp; parseInt(box.dataset.preparedAt || '0', 10);
+                return !t || (Date.now() - t > 10 * 60 * 1000);
+              }
+              function refreshSession() {
+                done = false;
+                prepare(true);
+              }
               function prepare(show) {
                 var box = document.getElementById('nexi-inline');
                 if (!box || done) { return; }
@@ -514,6 +525,7 @@
                 ).then(function (res) {
                   var r = (res &amp;&amp; res.result) || res || {};
                   if (r.error) { done = false; fail(r.error || 'Form non caricato. Riprova.'); return; }
+                  box.dataset.preparedAt = String(Date.now());
                   box.dataset.finalize = r.finalize_url;
                   box.dataset.confirm = r.confirm_url;
                   var fb = document.getElementById('nexi-inline-fields');
@@ -593,7 +605,14 @@
                       }
                       fail('Errore Nexi. Riprova.');
                     },
-                    onConfirmError: function () { fail('Dati non validi. Controlla e riprova.'); },
+                    onConfirmError: function () {
+                      if (sessionStale()) {
+                        refreshSession();
+                        fail('Sessione scaduta: campi rinnovati, ricompila e premi Pay now.');
+                        return;
+                      }
+                      fail('Dati non validi. Controlla e riprova.');
+                    },
                   });
                 } catch (e) { fail('SDK Nexi non caricato. Riprova.'); return; }
                 var payBtn = document.getElementById('nexi-inline-pay');
@@ -603,6 +622,11 @@
                     ev.preventDefault();
                     if (!document.getElementById('nexi-inline-privacy').checked) {
                       fail('Spunta la privacy per continuare.'); return;
+                    }
+                    if (sessionStale()) {
+                      refreshSession();
+                      fail('Sessione scaduta: campi rinnovati, ricompila e premi Pay now.');
+                      return;
                     }
                     if (window.__nexiBuild) { window.__nexiBuild.confirmData(function () {}); }
                   });
@@ -618,6 +642,11 @@
                       ev.stopPropagation();
                       if (!document.getElementById('nexi-inline-privacy').checked) {
                         fail('Spunta la privacy per continuare.'); return;
+                      }
+                      if (sessionStale()) {
+                        refreshSession();
+                        fail('Sessione scaduta: campi rinnovati, ricompila e premi Pay now.');
+                        return;
                       }
                       window.__nexiBuild.confirmData(function () {});
                     }
@@ -665,7 +694,9 @@
                 if (b &amp;&amp; !b.classList.contains('d-none')) { b.classList.add('d-none'); return; }
                 if (b) {
                   b.classList.remove('d-none');
-                  if (!b.querySelector('iframe')) { done = false; }
+                  // Sessione vecchia = campi morti: li rifaccio subito,
+                  // prima che il cliente ci scriva dentro.
+                  if (!b.querySelector('iframe') || sessionStale()) { refreshSession(); }
                 }
                 var r = row.querySelector('input[data-payment-method-code="card"]');
                 if (r) { try { r.checked = true; } catch (e) {} }
