@@ -9,7 +9,7 @@ from odoo import http
 from odoo.http import request
 from odoo.exceptions import ValidationError
 
-from ..models.payment_transaction import _nexi_safe_fields
+from ..models.payment_transaction import _nexi_lock_row, _nexi_safe_fields
 
 _logger = logging.getLogger(__name__)
 
@@ -92,26 +92,6 @@ def _nexi_tx_or_404(reference):
     if not tx.nexi_access_token or _nexi_tok() != tx.nexi_access_token:
         return None
     return tx
-
-
-def _nexi_lock_row(cr, tx_id, nowait=True):
-    """Blocca la riga della transazione. Con nowait: False se è già presa.
-
-    La verifica su Nexi può durare decine di secondi: chi arriva secondo non
-    deve mettersi in coda dietro al primo, altrimenti un worker resta fermo
-    quanto la rete. Il savepoint tiene la transazione usabile se il lock non
-    c'è.
-    """
-    sql = (
-        'SELECT id FROM payment_transaction WHERE id = %s FOR UPDATE'
-        + (' NOWAIT' if nowait else '')
-    )
-    try:
-        with cr.savepoint():
-            cr.execute(sql, (tx_id,))
-    except Exception:
-        return False
-    return True
 
 
 def _nexi_landing_route(landing, has_order):

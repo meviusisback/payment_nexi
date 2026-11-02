@@ -501,8 +501,63 @@ class SafeFieldsTest(unittest.TestCase):
         self.assertEqual(TRANSACTION._nexi_safe_fields(None), [])
 
 
-class OperationTimeTest(unittest.TestCase):
-    """Audit B5: operationTime non si confronta come stringa."""
+class ParseCentsTest(unittest.TestCase):
+    """#7 punto 2: intero = centesimi, decimale = euro, resto = None."""
+
+    def test_integer_is_cents(self):
+        self.assertEqual(TRANSACTION._parse_cents('1000'), 1000)
+        self.assertEqual(TRANSACTION._parse_cents(1000), 1000)
+
+    def test_decimal_is_euro(self):
+        self.assertEqual(TRANSACTION._parse_cents('10.00'), 1000)
+        self.assertEqual(TRANSACTION._parse_cents('12.34'), 1234)
+
+    def test_garbage_is_none(self):
+        self.assertIsNone(TRANSACTION._parse_cents(None))
+        self.assertIsNone(TRANSACTION._parse_cents(''))
+        self.assertIsNone(TRANSACTION._parse_cents('abc'))
+
+
+class CaptureTotalTest(unittest.TestCase):
+    """#7 punto 2: operazione -> riepilogo ordine -> somma incassi."""
+
+    def _op(self, **kw):
+        op = {'operationType': 'CAPTURE', 'operationResult': 'EXECUTED'}
+        op.update(kw)
+        return op
+
+    def test_operation_amount_wins(self):
+        data = {'orderStatus': {'capturedAmount': '1000'},
+                'operations': [self._op(operationAmount='1000')]}
+        self.assertEqual(
+            TRANSACTION._nexi_capture_total(data, self._op(operationAmount='1000')), 1000)
+
+    def test_operation_captured_amount_is_fallback(self):
+        data = {'orderStatus': {}, 'operations': []}
+        self.assertEqual(
+            TRANSACTION._nexi_capture_total(data, self._op(capturedAmount='1000')), 1000)
+
+    def test_order_status_captured_amount_is_fallback(self):
+        data = {'orderStatus': {'capturedAmount': '1000'}, 'operations': []}
+        self.assertEqual(TRANSACTION._nexi_capture_total(data, self._op()), 1000)
+
+    def test_sum_of_captures_is_last_resort(self):
+        data = {'orderStatus': {}, 'operations': [
+            self._op(operationAmount='600'),
+            self._op(operationAmount='400'),
+            {'operationType': 'AUTHORIZATION', 'operationResult': 'EXECUTED',
+             'operationAmount': '9999'},
+            {'operationType': 'CAPTURE', 'operationResult': 'DECLINED',
+             'operationAmount': '9999'},
+        ]}
+        self.assertEqual(TRANSACTION._nexi_capture_total(data, self._op()), 1000)
+
+    def test_no_amount_anywhere_is_none(self):
+        data = {'orderStatus': {}, 'operations': [self._op()]}
+        self.assertIsNone(TRANSACTION._nexi_capture_total(data, self._op()))
+        self.assertIsNone(TRANSACTION._nexi_capture_total({}, {}))
+
+
 
     def _data(self, *ops):
         return {'operations': [dict(operationType=t, operationResult=r, operationTime=ts)

@@ -5,7 +5,7 @@
 **Odoo 18 payment provider for Nexi XPay Web (REST API with `X-Api-Key`): Hosted Page redirect or embedded card fields at checkout. Odoo never sees the card number.**
 
 [![License: LGPL-3](https://img.shields.io/github/license/meviusisback/payment_nexi)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.3.0-blue)
+![Version](https://img.shields.io/badge/version-1.4.0-blue)
 ![Linux](https://img.shields.io/badge/linux-supported-1793d1)
 
 ![Module icon](static/description/icon.png)
@@ -20,8 +20,8 @@ Selling online with Odoo on an Italian Nexi terminal means choosing between send
 
 - **Two checkout modes**: **Hosted Page** (redirect to the Nexi page) and **Embedded Build v3** (card fields inside the Odoo checkout, rendered as Nexi iframes).
 - **Server-side verification only**: the outcome is always re-checked with `GET /orders/{reference}` — the browser return is never trusted.
-- **Strict close-out**: the transaction becomes `done` only with an `EXECUTED` outcome and matching amount (compared in cents, same unit on both sides) and currency.
-- **Correct outcome with automatic capture**: reads the **last operation among `AUTHORIZATION` and `CAPTURE`** — with automatic capture Nexi sends both, and looking only at the authorization left paid orders stuck in `pending`.
+- **Strict close-out**: the transaction becomes `done` only with an `EXECUTED` outcome and matching amount (compared in cents, same unit on both sides) and currency. The captured amount is read from the operation first, then from the order summary, then from the sum of the captures — decimal formats (euro) are converted, never rejected.
+- **Reconciliation cron**: every 10 minutes the pending transactions older than 10 minutes are re-checked on Nexi with the same code as the confirmation route — a payment whose browser return and notification were both lost still closes by itself.
 - **Explicit outcome mapping**: `AUTHORIZED` stays authorized-but-not-captured; `CANCELED`, `THREEDS_FAILED`, `DENIED`, `DENIED_BY_RISK`, `ERROR`, `DECLINED`, `FAILED` and `VOIDED` cancel the transaction; `THREEDS_VALIDATED` (3DS passed, payment still running) waits briefly like `PENDING`.
 - **Seven payment methods** with per-terminal availability:
 
@@ -96,9 +96,9 @@ Every transaction carries a random code (`tok`): without the right code the publ
 ```
 payment_nexi/
 ├── __init__.py                     # installation hook
-├── __manifest__.py                 # version 1.3.0, depends, data files
+├── __manifest__.py                 # version 1.4.0, depends, data files
 ├── controllers/main.py             # Nexi return + Build routes
-├── data/payment_method_data.xml    # payment methods
+├── data/payment_method_data.xml    # payment methods (Nexi-only codes; shared ones come from the core)
 ├── models/
 │   ├── payment_provider.py         # fields, API calls, URLs
 │   ├── payment_method_nexi.py      # methods visible at checkout
@@ -130,7 +130,7 @@ python3 -m unittest discover -s tests/standalone -t .
 odoo -d nexi_test -i payment_nexi --test-enable --test-tags /payment_nexi --stop-after-init
 ```
 
-The Odoo suite covers the outcome with `AUTHORIZATION` + `CAPTURE`, the pending authorization, the amount mismatch, the per-terminal method visibility and the currency/method defaults.
+The Odoo suite covers the outcome with `AUTHORIZATION` + `CAPTURE`, the pending authorization, the amount mismatch, the decimal and summed amounts, the reconciliation cron, the per-terminal method visibility and the currency/method defaults.
 
 ## License
 

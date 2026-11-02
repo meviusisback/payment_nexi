@@ -15,6 +15,9 @@ def post_init_hook(env):
         'card', 'googlepay', 'applepay', 'bancomatpay', 'mybank', 'paypal', 'paypal_bnpl',
         'visa', 'mastercard', 'amex',
     ]
+    # I metodi del core (card, paypal, mybank, visa, mastercard, amex) restano
+    # spenti finché l'admin non abilita il provider: è Odoo ad accenderli
+    # (provider._activate_default_pms). Solo nomi/icone/flag del core.
     methods = Method.search([('code', 'in', codes)])
     existing = Provider.search([('code', '=', 'nexi')])
     if not existing:
@@ -32,7 +35,7 @@ def post_init_hook(env):
         if missing:
             existing.write({'payment_method_ids': [(4, i) for i in missing]})
     base = os.path.join(os.path.dirname(__file__), 'static', 'src', 'img')
-    for code in codes:
+    for code in ('googlepay', 'applepay', 'bancomatpay', 'paypal_bnpl'):
         path = os.path.join(base, code + '.png')
         if not os.path.isfile(path):
             continue

@@ -56,14 +56,63 @@ def is_paid(operation_result):
 
 
 def _parse_cents(value):
-    """Centesimi interi da risposta Nexi. O numero intero, o niente."""
+    """Centesimi interi da risposta Nexi.
+
+    XPay scrive gli importi in centesimi interi (``"1000"`` = 10,00 €), ma
+    alcuni flussi mandano un decimale (``"10.00"``): il testo con il punto
+    si legge come euro e si converte con Decimal (mai float), altrimenti
+    un incasso vero finirebbe in errore. ``None`` se non è un numero.
+    """
     try:
-        d = Decimal(str(value))
+        text = str(value).strip()
+        d = Decimal(text)
     except (InvalidOperation, ValueError, TypeError):
         return None
+    if '.' in text or 'e' in text.lower():
+        try:
+            return int((d * 100).to_integral_value())
+        except (InvalidOperation, ValueError, TypeError):
+            return None
     if d != d.to_integral_value():
         return None
     return int(d)
+
+def _nexi_capture_total(data, op):
+    """Quanto Nexi dice di aver incassato, in centesimi.
+
+    L'importo non sta sempre nello stesso campo: sull'incasso eseguito può
+    stare sull'operazione (``operationAmount`` o ``capturedAmount``) oppure
+    solo sul riepilogo dell'ordine (``orderStatus.capturedAmount``); come
+    ultima spiaggia si sommano gli incassi in ``operations[]``. ``None`` se
+    da nessuna parte c'è un numero.
+    """
+    op = op or {}
+    for raw in (op.get('operationAmount'), op.get('capturedAmount')):
+        got = _parse_cents(raw) if raw not in (None, '') else None
+        if got is not None:
+            return got
+    status = (data or {}).get('orderStatus', {}) or {}
+    cap = status.get('capturedAmount')
+    if cap not in (None, ''):
+        got = _parse_cents(cap)
+        if got is not None:
+            return got
+    total = 0
+    found = False
+    for item in (data or {}).get('operations', []) or []:
+        if not isinstance(item, dict):
+            continue
+        if (item.get('operationType') or '').upper() != 'CAPTURE':
+            continue
+        if not is_paid((item.get('operationResult') or '').upper()):
+            continue
+        got = _parse_cents(item.get('operationAmount'))
+        if got is None:
+            got = _parse_cents(item.get('capturedAmount'))
+        if got is not None:
+            total += got
+            found = True
+    return total if found else None
 
 
 def _nexi_safe_fields(fields):
@@ -174,6 +223,26 @@ def _nexi_session_choice():
     return choice if isinstance(choice, dict) else None
 
 
+def _nexi_lock_row(cr, tx_id, nowait=True):
+    """Blocca la riga della transazione. Con nowait: False se è già presa.
+
+    La verifica su Nexi può durare decine di secondi: chi arriva secondo non
+    deve mettersi in coda dietro al primo, altrimenti un worker resta fermo
+    quanto la rete. Il savepoint tiene la transazione usabile se il lock non
+    c'è. Un posto solo per conferma e cron, così non divergono.
+    """
+    sql = (
+        'SELECT id FROM payment_transaction WHERE id = %s FOR UPDATE'
+        + (' NOWAIT' if nowait else '')
+    )
+    try:
+        with cr.savepoint():
+            cr.execute(sql, (tx_id,))
+    except Exception:
+        return False
+    return True
+
+
 class PaymentTransactionNexi(models.Model):
     _inherit = 'payment.transaction'
 
@@ -193,6 +262,11 @@ class PaymentTransactionNexi(models.Model):
     # Codice casuale per transazione: chi non ce l'ha non tocca il pagamento.
     nexi_access_token = fields.Char(
         string='Codice accesso Nexi', readonly=True, groups='base.group_system')
+    nexi_reconcile_count = fields.Integer(
+        string='Tentativi riconciliazione', readonly=True, default=0,
+        help='Quante volte il cron ha riverificato questa transazione su Nexi. '
+             'Oltre il limite la transazione viene lasciata stare.',
+    )
 
     def _nexi_family_ids(self, partner_id):
         """Partner + contatti collegati: il contratto vale per tutta la famiglia."""
@@ -323,7 +397,8 @@ class PaymentTransactionNexi(models.Model):
             if not self.env.su and not self.env.user.has_group('base.group_system'):
                 # Il cliente non sceglie token ne' contratti: li fa solo il sistema.
                 for f in ('nexi_contract_id', 'nexi_build_session', 'nexi_build_token',
-                          'nexi_masked_pan', 'nexi_order_id', 'nexi_access_token'):
+                          'nexi_masked_pan', 'nexi_order_id', 'nexi_access_token',
+                          'nexi_reconcile_count'):
                     vals.pop(f, None)
             if not vals.get('nexi_access_token'):
                 import secrets as _secrets
@@ -333,7 +408,8 @@ class PaymentTransactionNexi(models.Model):
     def write(self, vals):
         if not self.env.su and not self.env.user.has_group('base.group_system'):
             bad = [f for f in ('nexi_contract_id', 'nexi_build_session', 'nexi_build_token',
-                               'nexi_masked_pan', 'nexi_order_id', 'nexi_access_token')
+                               'nexi_masked_pan', 'nexi_order_id', 'nexi_access_token',
+                               'nexi_reconcile_count')
                    if f in (vals or {})]
             if bad:
                 raise AccessError(_('Solo il sistema puo scrivere i dati Nexi.'))
@@ -621,6 +697,52 @@ class PaymentTransactionNexi(models.Model):
         return tx
 
     @api.model
+    def _nexi_reconcile_pending(self, limit=20):
+        """Riverifica le transazioni Nexi rimaste appese.
+
+        Se il cliente chiude la scheda prima del ritorno e la notifica si
+        perde, la transazione resterebbe pending per sempre con i soldi
+        incassati: il cron la riverifica su Nexi con lo stesso codice della
+        conferma, quindi stato e importi li decide un posto solo.
+        """
+        from datetime import timedelta
+        from odoo import fields as _fields
+        cutoff = _fields.Datetime.now() - timedelta(minutes=10)
+        stuck = self.search([
+            ('provider_code', '=', 'nexi'),
+            ('state', '=', 'pending'),
+            ('is_post_processed', '=', False),
+            ('create_date', '<', cutoff),
+            ('nexi_reconcile_count', '<', 72),
+        ], order='create_date', limit=limit)
+        for tx in stuck:
+            if not _nexi_lock_row(self.env.cr, tx.id):
+                _logger.info('Nexi %s: chiusura già in corso in un altro flusso.', tx.reference)
+                continue
+            tx.invalidate_recordset()
+            if tx.state != 'pending' or tx.is_post_processed:
+                continue
+            try:
+                tx._process_notification_data({})
+                tx.invalidate_recordset()
+                if tx.state in ('done', 'cancel', 'error') and not tx.is_post_processed:
+                    tx._post_process()
+                    tx.invalidate_recordset()
+            except Exception:
+                _logger.exception('Nexi riconciliazione %s KO', tx.reference)
+            finally:
+                # Il contatore cresce a ogni passaggio: dopo 72 giri (~12 ore)
+                # la transazione esce dal giro e resta pending da gestire a mano.
+                tx.sudo().write({'nexi_reconcile_count': (tx.nexi_reconcile_count or 0) + 1})
+            if tx.state in ('done', 'error', 'cancel'):
+                _logger.info(
+                    'Nexi riconciliazione %s -> %s (tentativo %s).',
+                    tx.reference, tx.state, tx.nexi_reconcile_count,
+                )
+        return len(stuck)
+
+
+    @api.model
     def _nexi_last_auth(self, data):
         """L'ordine puo' avere piu' tentativi: conta solo l'ultimo."""
         return _nexi_latest_operation(data, AUTH_OPS)
@@ -698,14 +820,14 @@ class PaymentTransactionNexi(models.Model):
                 or op.get('maskedPanAlias')
                 or False
             )
-            status = (data or {}).get('orderStatus', {}) or {}
-            # Se l'operazione non porta l'importo, il controllo sotto su
-            # capturedAmount resta comunque obbligatorio.
-            if got is not None and got < expected:
-                self._set_error('Nexi importo non valido.')
-                return
-            cap = _parse_cents(status.get('capturedAmount', '0'))
-            if cap is None or cap < expected:
+            # L'importo che conta è quello incassato: operazione, riepilogo
+            # ordine o somma degli incassi. Manca ovunque = fail-closed.
+            total = _nexi_capture_total(data, op)
+            if total is None:
+                total = got
+            if got is not None and total is not None and got < total:
+                total = got
+            if total is None or total < expected:
                 self._set_error('Nexi incasso non completo.')
                 return
             if masked:

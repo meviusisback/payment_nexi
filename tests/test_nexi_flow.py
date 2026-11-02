@@ -25,7 +25,7 @@ class TestNexiReview(TransactionCase):
         ).search([('name', '=', 'EUR')], limit=1)
         if cls.currency_eur:
             cls.currency_eur.active = True
-        cls.method_card = cls.env['payment.method'].search([('code', '=', 'card')], limit=1)
+        cls.method_card = cls.env['payment.method'].with_context(active_test=False).search([('code', '=', 'card')], limit=1)
         cls.partner = cls.env['res.partner'].create({'name': 'Cliente Nexi test'})
         cls.provider = cls.env['payment.provider'].create({
             'name': 'Nexi test',
@@ -38,6 +38,9 @@ class TestNexiReview(TransactionCase):
             'nexi_test_url': 'https://xpaysandbox.nexigroup.com/orders/hpp',
             'payment_method_ids': [(6, 0, cls.method_card.ids)],
         })
+        # Il provider di prova nasce già abilitato (create, non write): il
+        # core accende i metodi solo al passaggio di stato, quindi qui serve.
+        cls.provider._activate_default_pms()
 
     def _new_tx(self, amount=10.0):
         return self.env['payment.transaction'].create({
@@ -108,6 +111,55 @@ class TestNexiReview(TransactionCase):
         with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
             tx._process_notification_data({})
         self.assertEqual(tx.state, 'done', 'incassato: non deve finire in errore')
+
+    def test_capture_without_any_captured_amount_is_refused(self):
+        """CAPTURE eseguito ma nessun importo da nessuna parte: fail-closed."""
+        tx = self._new_tx()
+        data = self._nexi_answer(
+            tx.reference, 1000,
+            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
+        )
+        data['orderStatus'].pop('capturedAmount', None)
+        for operation in data['operations']:
+            operation.pop('operationAmount', None)
+            operation.pop('capturedAmount', None)
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
+            tx._process_notification_data({})
+        self.assertEqual(tx.state, 'error')
+
+    def test_capture_with_decimal_amount_closes_payment(self):
+        """Formato decimale (euro): si converte, non si rifiuta."""
+        tx = self._new_tx()
+        data = self._nexi_answer(
+            tx.reference, 1000,
+            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
+        )
+        data['orderStatus']['capturedAmount'] = '10.00'
+        for operation in data['operations']:
+            operation['operationAmount'] = '10.00'
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
+            tx._process_notification_data({})
+        self.assertEqual(tx.state, 'done', '10.00 euro = 1000 centesimi')
+
+    def test_capture_summing_operations_closes_payment(self):
+        """Due incassi parziali che coprono la cifra: chiude."""
+        tx = self._new_tx()
+        data = self._nexi_answer(
+            tx.reference, 0,
+            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
+            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:06'),
+            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:07'),
+        )
+        data['orderStatus'].pop('capturedAmount', None)
+        data['operations'][0]['operationAmount'] = '600'
+        data['operations'][1]['operationAmount'] = '400'
+        # L'operazione che decide (l'ultima) non porta l'importo: deve
+        # valere la somma degli incassi, non un falso "non completo".
+        data['operations'][2].pop('operationAmount', None)
+        data['operations'][2].pop('capturedAmount', None)
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
+            tx._process_notification_data({})
+        self.assertEqual(tx.state, 'done')
 
     def test_wrong_order_id_is_refused(self):
         """La risposta deve riferirsi a QUESTO ordine."""
@@ -241,3 +293,111 @@ class TestNexiReview(TransactionCase):
         there = Tx.get_nexi_saved_cards(partner.id, other.id)
         self.assertEqual([c['contract_id'] for c in here], ['NCONTRATTO1'])
         self.assertEqual(there, [], 'la carta non vale per un altro terminale')
+
+    def test_reconcile_closes_stuck_payment(self):
+        """Cron: pending vecchia + incasso su Nexi -> done, senza browser."""
+        from datetime import timedelta
+        from odoo import fields as _fields
+        tx = self._new_tx()
+        tx._set_pending(state_message='in attesa')
+        old = _fields.Datetime.now() - timedelta(minutes=30)
+        self.env.cr.execute(
+            'UPDATE payment_transaction SET create_date = %s WHERE id = %s',
+            (old, tx.id),
+        )
+        tx.invalidate_recordset()
+        data = self._nexi_answer(
+            tx.reference, 1000,
+            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
+        )
+        Tx = self.env['payment.transaction']
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
+            found = Tx._nexi_reconcile_pending()
+        tx.invalidate_recordset()
+        self.assertEqual(found, 1)
+        self.assertEqual(tx.state, 'done')
+        self.assertEqual(tx.nexi_reconcile_count, 1)
+
+    def test_reconcile_skips_fresh_payment(self):
+        """Cron: pending appena creata -> non toccata, contatore fermo."""
+        tx = self._new_tx()
+        tx._set_pending(state_message='in attesa')
+        Tx = self.env['payment.transaction']
+        with patch.object(type(self.provider), '_nexi_make_request') as req:
+            found = Tx._nexi_reconcile_pending()
+        self.assertEqual(found, 0)
+        self.assertFalse(req.called, 'troppo fresca: Nexi non si chiama')
+        self.assertEqual(tx.nexi_reconcile_count, 0)
+
+    def test_reconcile_counts_attempts_and_gives_up(self):
+        """Cron: sempre PENDING -> resta pending, dopo 72 giri esce dal giro."""
+        from datetime import timedelta
+        from odoo import fields as _fields
+        tx = self._new_tx()
+        tx._set_pending(state_message='in attesa')
+        old = _fields.Datetime.now() - timedelta(minutes=30)
+        self.env.cr.execute(
+            'UPDATE payment_transaction SET create_date = %s WHERE id = %s',
+            (old, tx.id),
+        )
+        tx.invalidate_recordset()
+        data = self._nexi_answer(
+            tx.reference, 0,
+            ('AUTHORIZATION', 'PENDING', '2026-10-30T10:00:00'),
+        )
+        Tx = self.env['payment.transaction']
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
+            Tx._nexi_reconcile_pending()
+        tx.invalidate_recordset()
+        self.assertEqual(tx.state, 'pending')
+        self.assertEqual(tx.nexi_reconcile_count, 1)
+        tx.sudo().write({'nexi_reconcile_count': 72})
+        with patch.object(type(self.provider), '_nexi_make_request') as req:
+            found = Tx._nexi_reconcile_pending()
+        self.assertEqual(found, 0)
+        self.assertFalse(req.called, 'oltre il limite: Nexi non si chiama')
+
+    def test_no_duplicate_method_codes(self):
+        """#7 punto 3: un codice = un metodo (nessun doppione nostro)."""
+        Method = self.env['payment.method'].with_context(active_test=False)
+        for code in ('card', 'paypal', 'mybank', 'visa', 'mastercard', 'amex'):
+            with self.subTest(code=code):
+                self.assertEqual(
+                    Method.search_count([('code', '=', code)]), 1,
+                    'il codice %s deve esistere una volta sola' % code,
+                )
+
+    def test_migration_moves_duplicate_to_core(self):
+        """#7 punto 3: la migrazione riaggancia e cancella, due volte di fila."""
+        Method = self.env['payment.method'].with_context(active_test=False)
+        core = Method.search([('code', '=', 'card')], limit=1)
+        dup = Method.create({
+            'name': 'Carta duplicata', 'code': 'card', 'active': True,
+        })
+        tx = self._new_tx()
+        tx.payment_method_id = dup
+        self.provider.write({'payment_method_ids': [(4, dup.id)]})
+        self.env['ir.model.data'].create({
+            'module': 'payment_nexi', 'name': 'payment_method_nexi_card',
+            'model': 'payment.method', 'res_id': dup.id,
+        })
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            'nexi_migrate', self._migration_script(),
+        )
+        migrate_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(migrate_mod)
+        migrate_mod.migrate(self.env.cr, '1.4.0')
+        self.assertFalse(dup.exists(), 'il duplicato va cancellato')
+        tx.invalidate_recordset()
+        self.assertEqual(tx.payment_method_id, core)
+        self.assertIn(core, self.provider.payment_method_ids)
+        # Seconda esecuzione: a vuoto, senza errori e senza cambi.
+        migrate_mod.migrate(self.env.cr, '1.4.0')
+        self.assertEqual(tx.payment_method_id, core)
+
+    def _migration_script(self):
+        import os
+        from odoo.modules import get_module_path
+        return os.path.join(
+            get_module_path('payment_nexi'), 'migrations', '1.4.0', 'post-migrate.py')
