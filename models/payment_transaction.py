@@ -77,24 +77,25 @@ def _parse_cents(value):
         return None
     return int(d)
 
-def _nexi_capture_total(data, op):
+def _nexi_capture_total(data, op, currency=None):
     """Quanto Nexi dice di aver incassato, in centesimi.
 
-    L'importo non sta sempre nello stesso campo: sull'incasso eseguito può
-    stare sull'operazione (``operationAmount`` o ``capturedAmount``) oppure
-    solo sul riepilogo dell'ordine (``orderStatus.capturedAmount``); come
-    ultima spiaggia si sommano gli incassi in ``operations[]``. ``None`` se
-    da nessuna parte c'è un numero.
+    Prima il totale di livello ordine (``orderStatus.capturedAmount``): è
+    l'unico che dice quanto è stato preso davvero. Le cifre di singola
+    operazione valgono solo se il totale manca; come ultima spiaggia si
+    sommano gli incassi in ``operations[]``. ``None`` se da nessuna parte
+    c'è un numero. Con ``currency`` data, gli item in valuta diversa non
+    si sommano (mai mischiare valute).
     """
-    op = op or {}
-    for raw in (op.get('operationAmount'), op.get('capturedAmount')):
-        got = _parse_cents(raw) if raw not in (None, '') else None
-        if got is not None:
-            return got
     status = (data or {}).get('orderStatus', {}) or {}
     cap = status.get('capturedAmount')
     if cap not in (None, ''):
         got = _parse_cents(cap)
+        if got is not None:
+            return got
+    op = op or {}
+    for raw in (op.get('operationAmount'), op.get('capturedAmount')):
+        got = _parse_cents(raw) if raw not in (None, '') else None
         if got is not None:
             return got
     total = 0
@@ -105,6 +106,8 @@ def _nexi_capture_total(data, op):
         if (item.get('operationType') or '').upper() != 'CAPTURE':
             continue
         if not is_paid((item.get('operationResult') or '').upper()):
+            continue
+        if currency and (item.get('operationCurrency') or '') != currency:
             continue
         got = _parse_cents(item.get('operationAmount'))
         if got is None:
@@ -191,8 +194,10 @@ def _nexi_latest_operation(data, types):
 def _nexi_decide_operation(data):
     """L'operazione che decide l'esito: l'ultima fra autorizzazione e incasso.
 
-    :return: (operazione, 'auth' | 'capture'). Operazione vuota se Nexi non
-             ne ha ancora restituita nessuna.
+    :return: (operazione, 'auth' | 'capture' | 'uncertain'). Operazione vuota
+             se Nexi non ne ha ancora restituita nessuna; 'uncertain' se AUTH
+             e CAPTURE discordano ma le date non dicono qual è l'ultima (chi
+             chiama deve restare in attesa, mai chiudere).
     """
     auth = _nexi_latest_operation(data, AUTH_OPS)
     capture = _nexi_latest_operation(data, CAPTURE_OPS)
@@ -200,14 +205,24 @@ def _nexi_decide_operation(data):
         return capture, 'capture'
     if not capture:
         return auth, 'auth'
+    auth_paid = is_paid((auth.get('operationResult') or '').upper())
+    capture_paid = is_paid((capture.get('operationResult') or '').upper())
     auth_ts, capture_ts = _nexi_op_ts(auth), _nexi_op_ts(capture)
     if auth_ts is None or capture_ts is None:
-        # Data incerta: decide l'autorizzazione, non un incasso di cui non
-        # posso dimostrare che sia più recente.
-        return auth, 'auth'
-    if capture_ts >= auth_ts:
+        # Data incerta: se concordano (entrambe pagate o entrambe non
+        # pagate) decide l'autorizzazione; se discordano non si può sapere
+        # qual è l'ultima: incerta, mai chiudere.
+        if auth_paid == capture_paid:
+            return auth, 'auth'
+        return {}, 'uncertain'
+    if capture_ts > auth_ts:
         return capture, 'capture'
-    return auth, 'auth'
+    if capture_ts < auth_ts:
+        return auth, 'auth'
+    # Stesso istante: se discordano, incerta come sopra.
+    if auth_paid == capture_paid:
+        return capture, 'capture'
+    return {}, 'uncertain'
 
 
 def _nexi_session_choice():
@@ -617,20 +632,23 @@ class PaymentTransactionNexi(models.Model):
         if not hosted:
             self._set_error('Nexi non ha dato la pagina di pagamento.')
             raise ValidationError(_('Nexi errore. Riprova.'))
-        # Nexi dà hostedPage + securityToken separati: vanno uniti.
+        # Nexi dà hostedPage + securityToken separati: vanno uniti. Il token
+        # è del gateway: va encodato come valore, mai concatenato, altrimenti
+        # un '&' suo diventa un parametro in più nel form.
+        from urllib.parse import urlencode, urlparse, parse_qsl
         if token and 'securityToken' not in hosted:
-            sep = '&' if '?' in hosted else '?'
-            hosted = f'{hosted}{sep}securityToken={token}'
+            parts = urlparse(hosted)
+            query = parse_qsl(parts.query, keep_blank_values=True)
+            query.append(('securityToken', str(token)))
+            hosted = parts._replace(query=urlencode(query)).geturl()
         _logger.info('Nexi ordine %s creato.', self.reference)
+        # Un solo validatore per i domini Nexi (vedi payment_provider):
+        # qui non si reimplementa, si riusa.
+        from .payment_provider import is_nexi_url
+        if not is_nexi_url(hosted):
+            raise ValidationError(_('Nexi errore. Riprova.'))
         # Dividi base e parametri: il form GET li rimette da solo.
-        from urllib.parse import urlparse, parse_qsl
         parts = urlparse(hosted)
-        if parts.scheme.lower() != 'https':
-            raise ValidationError(_('Nexi errore. Riprova.'))
-        from .payment_provider import NEXI_HOSTS
-        host = (parts.netloc or '').lower()
-        if not any(host == h or host.endswith('.' + h) for h in NEXI_HOSTS):
-            raise ValidationError(_('Nexi errore. Riprova.'))
         base = f'{parts.scheme}://{parts.netloc}{parts.path}'
         params = dict(parse_qsl(parts.query))
         res.update(redirect_url=hosted, api_url=base, url_params=params)
@@ -703,7 +721,8 @@ class PaymentTransactionNexi(models.Model):
         Se il cliente chiude la scheda prima del ritorno e la notifica si
         perde, la transazione resterebbe pending per sempre con i soldi
         incassati: il cron la riverifica su Nexi con lo stesso codice della
-        conferma, quindi stato e importi li decide un posto solo.
+        conferma, quindi stato e importi li decide un posto solo. Un secondo
+        passaggio ritenta la post-elaborazione delle chiuse rimaste indietro.
         """
         from datetime import timedelta
         from odoo import fields as _fields
@@ -714,7 +733,7 @@ class PaymentTransactionNexi(models.Model):
             ('is_post_processed', '=', False),
             ('create_date', '<', cutoff),
             ('nexi_reconcile_count', '<', 72),
-        ], order='create_date', limit=limit)
+        ], order='nexi_reconcile_count, create_date', limit=limit)
         for tx in stuck:
             if not _nexi_lock_row(self.env.cr, tx.id):
                 _logger.info('Nexi %s: chiusura già in corso in un altro flusso.', tx.reference)
@@ -723,11 +742,14 @@ class PaymentTransactionNexi(models.Model):
             if tx.state != 'pending' or tx.is_post_processed:
                 continue
             try:
-                tx._process_notification_data({})
-                tx.invalidate_recordset()
-                if tx.state in ('done', 'cancel', 'error') and not tx.is_post_processed:
-                    tx._post_process()
+                with self.env.cr.savepoint():
+                    # Il cron può permettersi i retry con pausa (nexi_retry):
+                    # il path HTTP fa una sola GET per non tenere il worker.
+                    tx._process_notification_data({'nexi_retry': True})
                     tx.invalidate_recordset()
+                    if tx.state in ('done', 'cancel', 'error') and not tx.is_post_processed:
+                        tx._post_process()
+                        tx.invalidate_recordset()
             except Exception:
                 _logger.exception('Nexi riconciliazione %s KO', tx.reference)
             finally:
@@ -739,7 +761,32 @@ class PaymentTransactionNexi(models.Model):
                     'Nexi riconciliazione %s -> %s (tentativo %s).',
                     tx.reference, tx.state, tx.nexi_reconcile_count,
                 )
-        return len(stuck)
+        # Chiuse ma non post-elaborate (_post_process fallita dopo _set_done):
+        # senza questo passaggio resterebbero ferme per sempre, perché la
+        # search sopra copre solo le pending. Escluse quelle appena trattate:
+        # il loro _post_process è già stato tentato nel primo giro.
+        leftovers = self.search([
+            ('provider_code', '=', 'nexi'),
+            ('state', 'in', ['done', 'cancel', 'error']),
+            ('is_post_processed', '=', False),
+            ('nexi_reconcile_count', '<', 72),
+            ('id', 'not in', stuck.ids),
+        ], order='nexi_reconcile_count, create_date', limit=limit)
+        for tx in leftovers:
+            if not _nexi_lock_row(self.env.cr, tx.id):
+                continue
+            tx.invalidate_recordset()
+            if tx.is_post_processed or tx.state not in ('done', 'cancel', 'error'):
+                continue
+            try:
+                with self.env.cr.savepoint():
+                    tx._post_process()
+                    tx.invalidate_recordset()
+            except Exception:
+                _logger.exception('Nexi post-elaborazione %s KO', tx.reference)
+            finally:
+                tx.sudo().write({'nexi_reconcile_count': (tx.nexi_reconcile_count or 0) + 1})
+        return len(stuck) + len(leftovers)
 
 
     @api.model
@@ -775,10 +822,25 @@ class PaymentTransactionNexi(models.Model):
         result = ''
         op = {}
         op_kind = 'auth'
-        for attempt in range(3):
+        # Una sola GET nel path request: i retry con sleep vivono nel cron
+        # (_nexi_reconcile_pending passa attempts=3), altrimenti una confirm
+        # tiene un worker fino a ~60s e i 429 auto-indotti chiudono in errore.
+        attempts = 3 if (notification_data or {}).get('nexi_retry') else 1
+        for attempt in range(attempts):
             try:
                 data = provider._nexi_make_request('GET', verify_url)
             except ValidationError as e:
+                from .payment_provider import NexiApiError, NexiUnavailable
+                transient = isinstance(e, NexiUnavailable)
+                if isinstance(e, NexiApiError):
+                    status = getattr(e, 'status_code', None) or 0
+                    transient = status == 429 or status >= 500
+                if transient:
+                    # Guasto temporaneo (rete, timeout, 429/5xx): in attesa,
+                    # il cron riverifica. Mai error su un forse-pagato.
+                    _logger.warning('Nexi verifica %s rimandata: %s', self.reference, str(e)[:200])
+                    self._set_pending(state_message='Nexi non raggiungibile. Riprova.')
+                    return
                 _logger.warning('Nexi verifica %s KO: %s', self.reference, str(e)[:200])
                 self._set_error('Nexi non raggiungibile. Riprova.')
                 return
@@ -795,18 +857,24 @@ class PaymentTransactionNexi(models.Model):
                 self._set_error('Ritorno Nexi non valido.')
                 return
             result = ((op or {}).get('operationResult') or '').upper()
+            if op_kind == 'uncertain':
+                # AUTH e CAPTURE discordano senza date affidabili: non si può
+                # sapere qual è l'ultima. In attesa, mai chiudere.
+                result = ''
+                break
             # Il circuito a volte risponde PENDING per qualche secondo:
             # riprovo invece di dichiarare subito "in attesa".
             if result and result not in WAIT_RESULTS:
                 break
-            if attempt < 2:
+            if attempt < attempts - 1:
                 _time.sleep(1.0)
         if is_paid(result):
             # Controlla importo e valuta dell'operazione che ha deciso, poi
             # che l'incasso copra davvero la cifra: tutto in centesimi.
             expected = to_cents(self.amount)
+            want_cur = self.currency_id.name
             got_cur = op.get('operationCurrency')
-            if got_cur and got_cur != self.currency_id.name:
+            if not got_cur or got_cur != want_cur:
                 self._set_error('Nexi importo non valido.')
                 return
             amount_raw = op.get('operationAmount')
@@ -820,9 +888,11 @@ class PaymentTransactionNexi(models.Model):
                 or op.get('maskedPanAlias')
                 or False
             )
-            # L'importo che conta è quello incassato: operazione, riepilogo
-            # ordine o somma degli incassi. Manca ovunque = fail-closed.
-            total = _nexi_capture_total(data, op)
+            # L'importo che conta è quello incassato: totale ordine, cifre
+            # dell'operazione o somma degli incassi in stessa valuta. Se
+            # l'operazione che ha deciso porta meno del totale, vale il meno:
+            # si chiude solo quando ogni numero visto copre l'atteso.
+            total = _nexi_capture_total(data, op, currency=want_cur)
             if total is None:
                 total = got
             if got is not None and total is not None and got < total:

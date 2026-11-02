@@ -519,16 +519,21 @@ class ParseCentsTest(unittest.TestCase):
 
 
 class CaptureTotalTest(unittest.TestCase):
-    """#7 punto 2: operazione -> riepilogo ordine -> somma incassi."""
+    """#8 M1: totale ordine -> operazione -> somma incassi."""
 
     def _op(self, **kw):
         op = {'operationType': 'CAPTURE', 'operationResult': 'EXECUTED'}
         op.update(kw)
         return op
 
-    def test_operation_amount_wins(self):
-        data = {'orderStatus': {'capturedAmount': '1000'},
-                'operations': [self._op(operationAmount='1000')]}
+    def test_order_total_wins_over_operation(self):
+        data = {'orderStatus': {'capturedAmount': '600'},
+                'operations': [self._op(operationAmount='600')]}
+        self.assertEqual(
+            TRANSACTION._nexi_capture_total(data, self._op(operationAmount='1000')), 600)
+
+    def test_operation_amount_is_fallback(self):
+        data = {'orderStatus': {}, 'operations': []}
         self.assertEqual(
             TRANSACTION._nexi_capture_total(data, self._op(operationAmount='1000')), 1000)
 
@@ -537,9 +542,17 @@ class CaptureTotalTest(unittest.TestCase):
         self.assertEqual(
             TRANSACTION._nexi_capture_total(data, self._op(capturedAmount='1000')), 1000)
 
-    def test_order_status_captured_amount_is_fallback(self):
+    def test_order_status_captured_amount_is_first(self):
         data = {'orderStatus': {'capturedAmount': '1000'}, 'operations': []}
         self.assertEqual(TRANSACTION._nexi_capture_total(data, self._op()), 1000)
+
+    def test_sum_skips_other_currencies(self):
+        data = {'orderStatus': {}, 'operations': [
+            self._op(operationAmount='600', operationCurrency='EUR'),
+            self._op(operationAmount='400', operationCurrency='USD'),
+        ]}
+        self.assertEqual(
+            TRANSACTION._nexi_capture_total(data, self._op(), currency='EUR'), 600)
 
     def test_sum_of_captures_is_last_resort(self):
         data = {'orderStatus': {}, 'operations': [
@@ -567,20 +580,39 @@ class CaptureTotalTest(unittest.TestCase):
         # 'T9:00:00' > 'T10:00:00' come stringa: qui deve vincere l'autorizzazione.
         data = self._data(
             ('AUTHORIZATION', 'EXECUTED', '2026-10-30T10:00:00'),
-            ('CAPTURE', 'CANCELED', '2026-10-30T9:00:00'),
+            ('CAPTURE', 'EXECUTED', '2026-10-30T9:00:00'),
         )
         op, kind = TRANSACTION._nexi_decide_operation(data)
         self.assertEqual(kind, 'auth')
         self.assertEqual(op['operationResult'], 'EXECUTED')
 
-    def test_missing_time_prefers_the_authorization(self):
+    def test_disagreeing_without_time_is_uncertain(self):
+        # AUTH e CAPTURE discordano senza date: non si può sapere qual è
+        # l'ultima, mai chiudere.
+        data = self._data(
+            ('AUTHORIZATION', 'EXECUTED', None),
+            ('CAPTURE', 'DECLINED', None),
+        )
+        op, kind = TRANSACTION._nexi_decide_operation(data)
+        self.assertEqual(kind, 'uncertain')
+        self.assertEqual(op, {})
+
+    def test_agreeing_without_time_prefers_the_authorization(self):
         data = self._data(
             ('AUTHORIZATION', 'AUTHORIZED', None),
-            ('CAPTURE', 'EXECUTED', None),
+            ('CAPTURE', 'DECLINED', None),
         )
         op, kind = TRANSACTION._nexi_decide_operation(data)
         self.assertEqual(kind, 'auth')
         self.assertEqual(op['operationResult'], 'AUTHORIZED')
+
+    def test_same_instant_disagreeing_is_uncertain(self):
+        data = self._data(
+            ('AUTHORIZATION', 'EXECUTED', '2026-10-30T10:00:00'),
+            ('CAPTURE', 'DECLINED', '2026-10-30T10:00:00'),
+        )
+        op, kind = TRANSACTION._nexi_decide_operation(data)
+        self.assertEqual(kind, 'uncertain')
 
     def test_capture_only_still_decides(self):
         op, kind = TRANSACTION._nexi_decide_operation(
@@ -613,6 +645,26 @@ class RateLimitBucketTest(unittest.TestCase):
         CONTROLLER._nexi_rl_allow('nexi:fields:altro', 30)
         self.assertIn('nexi:prepare:mio-ip', CONTROLLER._NEXI_RL,
                       'un flood non deve azzerare i contatori degli altri')
+
+    def test_full_table_rejects_only_new_keys(self):
+        now = CONTROLLER.time.time()
+        CONTROLLER._NEXI_RL['nexi:prepare:mio-ip'] = [now]
+        for i in range(4100):
+            CONTROLLER._NEXI_RL['nexi:notify:%032d' % i] = [now]
+        self.assertTrue(CONTROLLER._nexi_rl_allow('nexi:prepare:mio-ip', 30),
+                        'i bucket esistenti continuano a contare')
+        self.assertFalse(CONTROLLER._nexi_rl_allow('nexi:prepare:nuovo', 30),
+                         'chi chiede una chiave nuova viene rifiutato')
+
+    def test_notify_flood_hits_the_ip_cap(self):
+        # 600 notifiche dallo stesso IP con tok diversi: il per-IP scatta.
+        allowed = 0
+        for i in range(700):
+            key, limit = CONTROLLER._nexi_confirm_limit(True, {'tok': 'tok-%d' % i})
+            if limit and CONTROLLER._nexi_rl_allow(key, limit):
+                allowed += 1
+        self.assertLessEqual(allowed, 600)
+        self.assertGreater(allowed, 500)
 
 if __name__ == '__main__':
     unittest.main()

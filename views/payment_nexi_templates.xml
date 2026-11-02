@@ -83,7 +83,7 @@
                   var box = document.getElementById('nexi-build-fields');
                   box.innerHTML = '';
                   d.fieldSet.fields.forEach(function (f) {
-                    if (!f.src) return;
+                    if (!f.src || !nexiUrlOk(f.src)) return;
                     box.appendChild(iframeFor(f, '60px'));
                   });
                   document.getElementById('nexi-build-privacy-wrap').classList.remove('d-none');
@@ -181,7 +181,7 @@
             var box = document.getElementById('nexi-build-methods');
             box.innerHTML = '';
             (fields || []).forEach(function (f) {
-              if (!f.src) return;
+              if (!f.src || !nexiUrlOk(f.src)) return;
               var wrap = document.createElement('div');
               wrap.appendChild(iframeFor(f, f.class === 'APM' ? '60px' : '70px'));
               box.appendChild(wrap);
@@ -205,7 +205,7 @@
                   var box = document.getElementById('nexi-build-fields');
                   box.innerHTML = '';
                   d.fieldSet.fields.forEach(function (f) {
-                    if (!f.src) return;
+                    if (!f.src || !nexiUrlOk(f.src)) return;
                     box.appendChild(iframeFor(f, '60px'));
                   });
                   document.getElementById('nexi-build-privacy-wrap').classList.remove('d-none');
@@ -695,7 +695,7 @@
                     CARDHOLDER_EMAIL: 'Email',
                   };
                   (r.fields || []).forEach(function (f) {
-                    if (!f || !f.src) return;
+                    if (!f || !f.src || !nexiUrlOk(f.src)) return;
                     var wrap = document.createElement('div');
                     wrap.className = 'nexi-field';
                     wrap.setAttribute('data-nexi-field', f.id || '');

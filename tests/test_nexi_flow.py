@@ -312,7 +312,8 @@ class TestNexiReview(TransactionCase):
         )
         Tx = self.env['payment.transaction']
         with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
-            found = Tx._nexi_reconcile_pending()
+            with patch.object(type(Tx), '_post_process', return_value=True):
+                found = Tx._nexi_reconcile_pending()
         tx.invalidate_recordset()
         self.assertEqual(found, 1)
         self.assertEqual(tx.state, 'done')
@@ -401,3 +402,122 @@ class TestNexiReview(TransactionCase):
         from odoo.modules import get_module_path
         return os.path.join(
             get_module_path('payment_nexi'), 'migrations', '1.4.0', 'post-migrate.py')
+
+    def test_disagreeing_operations_without_time_stay_pending(self):
+        """#8 H1: AUTH pagata + CAPTURE KO senza date -> pending, mai done."""
+        tx = self._new_tx()
+        data = self._nexi_answer(
+            tx.reference, 1000,
+            ('AUTHORIZATION', 'EXECUTED', None),
+            ('CAPTURE', 'DECLINED', None),
+        )
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
+            tx._process_notification_data({})
+        self.assertEqual(tx.state, 'pending')
+
+    def test_transient_gateway_error_stays_pending(self):
+        """#8 H2: timeout/5xx di Nexi -> pending (il cron riverifica)."""
+        from odoo.addons.payment_nexi.models.payment_provider import (
+            NexiApiError, NexiUnavailable,
+        )
+        tx = self._new_tx()
+        with patch.object(
+            type(self.provider), '_nexi_make_request', side_effect=NexiUnavailable('giù')
+        ):
+            tx._process_notification_data({})
+        self.assertEqual(tx.state, 'pending')
+        tx2 = self._new_tx()
+        err = NexiApiError('Nexi: errore', status_code=503)
+        with patch.object(
+            type(self.provider), '_nexi_make_request', side_effect=err
+        ):
+            tx2._process_notification_data({})
+        self.assertEqual(tx2.state, 'pending')
+
+    def test_missing_currency_is_refused(self):
+        """#8 M2: EXECUTED senza valuta -> error, mai done."""
+        tx = self._new_tx()
+        data = self._nexi_answer(
+            tx.reference, 1000,
+            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
+        )
+        for operation in data['operations']:
+            operation.pop('operationCurrency', None)
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
+            tx._process_notification_data({})
+        self.assertEqual(tx.state, 'error')
+
+    def test_partial_order_total_is_refused(self):
+        """#8 M1: operazione 1000 ma totale ordine 600 -> error."""
+        tx = self._new_tx()
+        data = self._nexi_answer(
+            tx.reference, 600,
+            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
+        )
+        data['operations'][0]['operationAmount'] = '1000'
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
+            tx._process_notification_data({})
+        self.assertEqual(tx.state, 'error')
+
+    def test_http_path_makes_a_single_call(self):
+        """#8 M6: nel path request una sola GET, niente sleep."""
+        tx = self._new_tx()
+        data = self._nexi_answer(
+            tx.reference, 0,
+            ('AUTHORIZATION', 'PENDING', '2026-10-30T10:00:00'),
+        )
+        with patch.object(
+            type(self.provider), '_nexi_make_request', return_value=data
+        ) as req:
+            tx._process_notification_data({})
+        self.assertEqual(req.call_count, 1)
+        self.assertEqual(tx.state, 'pending')
+
+    def test_reconcile_retries_post_processing(self):
+        """#8 M3: done non post-elaborata -> il cron ritenta _post_process."""
+        tx = self._new_tx()
+        tx._set_done()
+        tx.write({'is_post_processed': False})
+        Tx = self.env['payment.transaction']
+        with patch.object(type(Tx), '_post_process') as post:
+            found = Tx._nexi_reconcile_pending()
+        self.assertTrue(post.called)
+        self.assertGreaterEqual(found, 1)
+
+    def test_hpp_token_is_encoded_not_concatenated(self):
+        """#8 M5: securityToken con '&' non diventa un parametro in più."""
+        tx = self._new_tx()
+        answer = {
+            'hostedPage': 'https://xpay.nexigroup.com/pay?x=1',
+            'securityToken': 't&amount=1',
+        }
+        with patch.object(
+            type(self.provider), '_nexi_make_request', return_value=answer
+        ):
+            res = tx._get_specific_rendering_values({
+                'amount': 10.0, 'currency_id': tx.currency_id.id,
+                'partner_id': self.partner.id, 'reference': tx.reference,
+                'should_tokenize': False,
+                'base_url': 'https://shop.example.com',
+            })
+        self.assertNotIn('amount', res['url_params'])
+        self.assertEqual(res['url_params']['securityToken'], 't&amount=1')
+
+    def test_hpp_lookalike_host_is_refused(self):
+        """#8 M5: hostedPage su host sosia -> rifiutato dal validatore unico."""
+        from odoo.exceptions import ValidationError
+        tx = self._new_tx()
+        answer = {
+            'hostedPage': 'https://xpay.nexigroup.com.evil.example/pay',
+            'securityToken': 't',
+        }
+        with patch.object(
+            type(self.provider), '_nexi_make_request', return_value=answer
+        ):
+            with self.assertRaises(ValidationError):
+                tx._get_specific_rendering_values({
+                    'amount': 10.0, 'currency_id': tx.currency_id.id,
+                    'partner_id': self.partner.id, 'reference': tx.reference,
+                    'should_tokenize': False,
+                    'base_url': 'https://shop.example.com',
+                })

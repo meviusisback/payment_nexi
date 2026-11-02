@@ -33,9 +33,9 @@ def _nexi_rl_allow(key, limit, window=60):
         expired = [k for k, v in _NEXI_RL.items() if not v or now - v[-1] >= window]
         for k in expired[:2000]:
             _NEXI_RL.pop(k, None)
-        if len(_NEXI_RL) > 4000:
-            # Troppe chiavi attive anche dopo la pulizia: meglio rifiutare che
-            # crescere senza limite.
+        if len(_NEXI_RL) > 4000 and key not in _NEXI_RL:
+            # Troppe chiavi attive anche dopo la pulizia: rifiuto solo chi
+            # ne chiede una nuova, i bucket esistenti continuano a contare.
             return False
     lst = [t for t in (_NEXI_RL.get(key) or []) if now - t < window]
     if len(lst) >= limit:
@@ -77,7 +77,12 @@ def _nexi_confirm_limit(is_notify, kw):
     """
     if is_notify:
         # Chiave a dimensione fissa: il tok lo sceglie il chiamante, non deve
-        # decidere quanto occupa in memoria né quanto vive il secchiello.
+        # decidere quanto occupa in memoria né quanto vive il secchiello. Il
+        # doppio limite (IP + transazione) impedisce di ruotare tok per fare
+        # flood: chi chiama controlla anche il per-IP.
+        ip = _nexi_rl_key('notify-ip')
+        if not _nexi_rl_allow(ip, NOTIFY_LIMIT * 10):
+            return ip, 0
         return 'nexi:notify:%s' % _nexi_rl_bucket((kw or {}).get('tok')), NOTIFY_LIMIT
     return _nexi_rl_key('confirm'), BROWSER_LIMIT
 
