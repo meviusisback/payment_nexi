@@ -16,6 +16,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest.mock import patch
 
 ADDON_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
@@ -669,6 +670,247 @@ class RateLimitBucketTest(unittest.TestCase):
                 allowed += 1
         self.assertLessEqual(allowed, 600)
         self.assertGreater(allowed, 500)
+
+class ParseCentsNonFiniteTest(unittest.TestCase):
+    """#10 L-B1: Infinity/NaN non devono diventare un 500."""
+
+    def test_non_finite_is_none(self):
+        for value in ('Infinity', '-Infinity', 'NaN', 'sNaN'):
+            with self.subTest(value=value):
+                self.assertIsNone(TRANSACTION._parse_cents(value))
+                self.assertEqual(TRANSACTION.to_cents(value), 0)
+
+    def test_finite_still_works(self):
+        self.assertEqual(TRANSACTION._parse_cents('1000'), 1000)
+        self.assertEqual(TRANSACTION._parse_cents('10.00'), 1000)
+
+
+class MalformedPayloadTest(unittest.TestCase):
+    """#10 L-B1: forme gateway inattese, non eccezioni."""
+
+    def test_order_status_is_not_a_dict(self):
+        self.assertIsNone(TRANSACTION._nexi_capture_total(
+            {'orderStatus': 'rotto', 'operations': 'rotto'}, {}))
+        self.assertIsNone(TRANSACTION._nexi_capture_total('rotto', []))
+
+    def test_operations_is_not_a_list(self):
+        op, kind = TRANSACTION._nexi_decide_operation({'operations': 'rotto'})
+        self.assertEqual(op, {})
+        self.assertEqual(kind, 'capture')
+
+    def test_order_id_extraction_ignores_bad_shapes(self):
+        self.assertEqual(TRANSACTION._nexi_got_order_id(None), '')
+        self.assertEqual(TRANSACTION._nexi_got_order_id({'orderStatus': 'x'}), '')
+        self.assertEqual(
+            TRANSACTION._nexi_got_order_id(
+                {'orderStatus': {'order': {'orderId': 'REF1'}}}),
+            'REF1',
+        )
+
+
+class SanitizeTextTest(unittest.TestCase):
+    """#10 L-B14: log a una riga, senza ANSI/bidi/control."""
+
+    def test_control_sequences_are_removed(self):
+        clean = PROVIDER._nexi_sanitize_text(
+            'errore\n\x1b[31mrosso\x1b[0m\u202eacapo\r\tfine')
+        self.assertNotIn('\n', clean)
+        self.assertNotIn('\x1b', clean)
+        self.assertNotIn('\u202e', clean)
+        self.assertIn('rosso', clean)
+        self.assertIn('fine', clean)
+
+    def test_text_is_capped(self):
+        self.assertLessEqual(len(PROVIDER._nexi_sanitize_text('x' * 1000)), 300)
+
+
+class BodyGuardTest(unittest.TestCase):
+    """#10 L-B2: corpo limitato e deadline complessiva."""
+
+    class _Resp:
+        def __init__(self, chunks, headers=None):
+            self._chunks = chunks
+            self.headers = headers or {}
+
+        def iter_content(self, size):
+            for chunk in self._chunks:
+                yield chunk
+
+    def test_content_length_over_cap_is_refused(self):
+        with self.assertRaises(PROVIDER.NexiUnavailable):
+            PROVIDER._nexi_read_limited(
+                self._Resp([], {'Content-Length': '200'}), max_bytes=100)
+
+    def test_stream_over_cap_is_refused(self):
+        with self.assertRaises(PROVIDER.NexiUnavailable):
+            PROVIDER._nexi_read_limited(
+                self._Resp([b'x' * 60, b'y' * 60]), max_bytes=100)
+
+    def test_deadline_stops_slow_drip(self):
+        clock = iter([0, 11])
+        with self.assertRaises(PROVIDER.NexiUnavailable):
+            PROVIDER._nexi_read_limited(
+                self._Resp([b'a', b'b']), max_bytes=100,
+                deadline=10, now=lambda: next(clock))
+
+    def test_small_body_is_returned(self):
+        self.assertEqual(
+            PROVIDER._nexi_read_limited(self._Resp([b'a', b'b']), max_bytes=100),
+            b'ab',
+        )
+
+    def test_error_detail_survives_recursion(self):
+        class Bad:
+            def json(self):
+                raise RecursionError('troppo profondo')
+        self.assertEqual(PROVIDER._nexi_error_detail(Bad()), 'errore. Riprova.')
+        self.assertIsNone(PROVIDER._nexi_error_code(Bad()))
+
+
+class RequestGuardTest(unittest.TestCase):
+    """#10 L-B2: la richiesta usa stream e il corpo passa dal tetto."""
+
+    class _Resp:
+        status_code = 200
+        headers = {'Content-Length': '2'}
+        def __init__(self):
+            self._content = False
+        def iter_content(self, size):
+            yield b'{}'
+        def close(self):
+            pass
+        def raise_for_status(self):
+            pass
+        @property
+        def text(self):
+            return (self._content or b'').decode('utf-8') if isinstance(self._content, bytes) else ''
+        def json(self):
+            return {'ok': True}
+
+    class _Provider(PROVIDER.PaymentProviderNexi):
+        nexi_api_key = 'chiave'
+        def ensure_one(self):
+            return self
+
+    def test_stream_is_used(self):
+        response = self._Resp()
+        with patch.object(PROVIDER.requests, 'request', return_value=response) as req:
+            data = self._Provider()._nexi_make_request(
+                'GET', 'https://xpay.nexigroup.com/orders/x')
+        self.assertEqual(data, {'ok': True})
+        self.assertIs(req.call_args.kwargs.get('stream'), True)
+
+    def test_oversized_content_length_is_refused(self):
+        response = self._Resp()
+        response.headers = {'Content-Length': str(PROVIDER.NEXI_MAX_BODY + 1)}
+        with patch.object(PROVIDER.requests, 'request', return_value=response):
+            with self.assertRaises(PROVIDER.NexiUnavailable):
+                self._Provider()._nexi_make_request(
+                    'GET', 'https://xpay.nexigroup.com/orders/x')
+
+
+class BaseUrlTest(unittest.TestCase):
+    """#10 L-B6: base pubblica solo https e host del sito."""
+
+    def test_valid_https(self):
+        self.assertEqual(
+            PROVIDER._nexi_clean_base_url('https://shop.example.com/'),
+            'https://shop.example.com',
+        )
+
+    def test_localhost_and_http_are_refused(self):
+        for value in ('http://shop.example.com', 'https://localhost:8069',
+                      'https://127.0.0.1', 'https://user@shop.example.com'):
+            with self.subTest(value=value):
+                self.assertEqual(PROVIDER._nexi_clean_base_url(value), '')
+
+    def test_host_must_be_configured(self):
+        self.assertTrue(PROVIDER._nexi_base_allowed(
+            'https://shop.example.com', {'shop.example.com'}))
+        self.assertFalse(PROVIDER._nexi_base_allowed(
+            'https://evil.example', {'shop.example.com'}))
+
+    def test_controller_uses_configured_base(self):
+        class P:
+            nexi_public_base = 'https://shop.example.com'
+            def get_base_url(self):
+                return 'https://fallback.example'
+
+        class W:
+            domain = 'sito.example'
+
+        self.assertEqual(
+            CONTROLLER._nexi_site_base(P(), W()), 'https://shop.example.com')
+        P.nexi_public_base = ''
+        self.assertEqual(CONTROLLER._nexi_site_base(P(), W()), 'https://sito.example')
+
+
+class GlobalRateLimitTest(unittest.TestCase):
+    """#10 L-B3: la rotazione di XFF non deve evitare il tetto globale."""
+
+    def setUp(self):
+        CONTROLLER._NEXI_RL.clear()
+
+    def test_global_bucket_is_a_ceiling(self):
+        allowed = sum(
+            1 for _ in range(CONTROLLER.GLOBAL_LIMIT + 5)
+            if CONTROLLER._nexi_global_allow()
+        )
+        self.assertEqual(allowed, CONTROLLER.GLOBAL_LIMIT)
+
+
+class TokExtractionTest(unittest.TestCase):
+    """#10 M-B3: tok da header, body, params o query."""
+
+    class _Http:
+        def __init__(self):
+            self.headers = {}
+            self.args = {}
+
+    def _json_data(self):
+        if isinstance(self._json, Exception):
+            raise self._json
+        return self._json
+
+    def setUp(self):
+        self.old_http = ODOO_HTTP.request.httprequest
+        self.old_params = getattr(ODOO_HTTP.request, 'params', None)
+        self.old_json = getattr(ODOO_HTTP.request, 'get_json_data', None)
+        self._json = None
+        ODOO_HTTP.request.httprequest = self._Http()
+        ODOO_HTTP.request.params = {}
+        ODOO_HTTP.request.get_json_data = self._json_data
+
+    def tearDown(self):
+        ODOO_HTTP.request.httprequest = self.old_http
+        ODOO_HTTP.request.params = self.old_params
+        if self.old_json is None:
+            del ODOO_HTTP.request.get_json_data
+        else:
+            ODOO_HTTP.request.get_json_data = self.old_json
+
+    def test_header_wins(self):
+        ODOO_HTTP.request.httprequest.headers = {'X-Nexi-Token': 'header'}
+        self._json = {'params': {'tok': 'body'}}
+        self.assertEqual(CONTROLLER._nexi_tok(), 'header')
+
+    def test_json_params_body(self):
+        self._json = {'params': {'tok': 'body'}}
+        self.assertEqual(CONTROLLER._nexi_tok(), 'body')
+
+    def test_raw_json_body(self):
+        self._json = {'tok': 'raw'}
+        self.assertEqual(CONTROLLER._nexi_tok(), 'raw')
+
+    def test_query_fallback(self):
+        self._json = ValueError('niente json')
+        ODOO_HTTP.request.httprequest.args = {'tok': 'query'}
+        self.assertEqual(CONTROLLER._nexi_tok(), 'query')
+
+    def test_missing_is_none(self):
+        self._json = ValueError('niente json')
+        self.assertIsNone(CONTROLLER._nexi_tok())
+
 
 if __name__ == '__main__':
     unittest.main()

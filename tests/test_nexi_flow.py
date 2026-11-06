@@ -653,3 +653,243 @@ class TestNexiReview(TransactionCase):
         with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
             tx._process_notification_data({})
         self.assertEqual(tx.state, 'cancel')
+
+    def test_overpay_is_not_done(self):
+        """#10 L-B10: incassato più dell'atteso -> error, non done senza tetto."""
+        tx = self._new_tx()
+        data = self._nexi_answer(
+            tx.reference, 2000,
+            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
+        )
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
+            with self.assertLogs(
+                'odoo.addons.payment_nexi.models.payment_transaction',
+                level='ERROR',
+            ) as logs:
+                tx._process_notification_data({})
+        self.assertEqual(tx.state, 'error')
+        self.assertFalse(tx.nexi_uncertain, 'un overpay noto non è un esito incerto')
+        self.assertTrue(
+            any('incassato 2000' in line and 'atteso 1000' in line
+                for line in logs.output),
+            'il log deve dire incassato vs atteso per il rimborso manuale',
+        )
+
+    def test_partial_capture_is_uncertain_and_reverified(self):
+        """#10 M-B1: incasso parziale -> error incerto, il cron lo recupera."""
+        from datetime import timedelta
+        from odoo import fields as _fields
+        tx = self._new_tx()
+        short = self._nexi_answer(
+            tx.reference, 600,
+            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
+        )
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=short):
+            tx._process_notification_data({})
+        self.assertEqual(tx.state, 'error')
+        self.assertTrue(tx.nexi_uncertain)
+        self.assertEqual(tx.nexi_last_captured, 600)
+        old = _fields.Datetime.now() - timedelta(minutes=30)
+        self.env.cr.execute(
+            'UPDATE payment_transaction SET create_date = %s WHERE id = %s',
+            (old, tx.id),
+        )
+        tx.invalidate_recordset()
+        full = self._nexi_answer(
+            tx.reference, 1000,
+            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
+        )
+        Tx = self.env['payment.transaction']
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=full):
+            with patch.object(type(Tx), '_post_process', return_value=True):
+                found = Tx._nexi_reconcile_pending()
+        tx.invalidate_recordset()
+        self.assertGreaterEqual(found, 1)
+        self.assertEqual(tx.state, 'done')
+        self.assertEqual(tx.nexi_reverify_count, 1)
+
+    def test_uncertain_error_gives_up_with_alert(self):
+        """#10 M-B1: dopo 12 riverifiche resta error, con un log per l'operatore."""
+        from datetime import timedelta
+        from odoo import fields as _fields
+        tx = self._new_tx()
+        short = self._nexi_answer(
+            tx.reference, 600,
+            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
+        )
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=short):
+            tx._process_notification_data({})
+        old = _fields.Datetime.now() - timedelta(minutes=30)
+        self.env.cr.execute(
+            'UPDATE payment_transaction SET create_date = %s, nexi_reverify_count = 11 '
+            'WHERE id = %s', (old, tx.id),
+        )
+        tx.invalidate_recordset()
+        Tx = self.env['payment.transaction']
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=short):
+            with self.assertLogs(
+                'odoo.addons.payment_nexi.models.payment_transaction',
+                level='ERROR',
+            ) as logs:
+                Tx._nexi_reconcile_pending()
+        tx.invalidate_recordset()
+        self.assertEqual(tx.state, 'error')
+        self.assertEqual(tx.nexi_reverify_count, 12)
+        self.assertTrue(any('errore incerto' in line for line in logs.output))
+
+    def test_pending_gives_up_with_alert(self):
+        """#10 M-B2: la pending che esce dal giro non sparisce in silenzio."""
+        from datetime import timedelta
+        from odoo import fields as _fields
+        tx = self._new_tx()
+        tx._set_pending(state_message='in attesa')
+        old = _fields.Datetime.now() - timedelta(minutes=30)
+        self.env.cr.execute(
+            'UPDATE payment_transaction SET create_date = %s, nexi_reconcile_count = 71 '
+            'WHERE id = %s', (old, tx.id),
+        )
+        tx.invalidate_recordset()
+        data = self._nexi_answer(
+            tx.reference, 0,
+            ('AUTHORIZATION', 'PENDING', '2026-10-30T10:00:00'),
+        )
+        Tx = self.env['payment.transaction']
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
+            with self.assertLogs(
+                'odoo.addons.payment_nexi.models.payment_transaction',
+                level='ERROR',
+            ) as logs:
+                Tx._nexi_reconcile_pending()
+        tx.invalidate_recordset()
+        self.assertEqual(tx.state, 'pending')
+        self.assertEqual(tx.nexi_reconcile_count, 72)
+        self.assertTrue(any('ancora pending' in line for line in logs.output))
+
+    def test_malformed_gateway_payload_does_not_raise(self):
+        """#10 L-B1: orderStatus/operations di tipo strano -> pending, no 500."""
+        tx = self._new_tx()
+        data = {
+            'orderId': tx.reference,
+            'orderStatus': 'rotto',
+            'operations': 'rotto',
+        }
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
+            tx._process_notification_data({})
+        self.assertEqual(tx.state, 'pending')
+
+    def test_4xx_marks_the_error_as_uncertain(self):
+        """#10 M-B1: un 4xx non è la prova che il pagamento sia fallito."""
+        from odoo.addons.payment_nexi.models.payment_provider import NexiApiError
+        tx = self._new_tx()
+        err = NexiApiError('Nexi: richiesta rifiutata', status_code=400)
+        with patch.object(type(self.provider), '_nexi_make_request', side_effect=err):
+            tx._process_notification_data({})
+        self.assertEqual(tx.state, 'error')
+        self.assertTrue(tx.nexi_uncertain)
+
+    def test_copy_does_not_clone_nexi_secrets(self):
+        """#10 L-B8: duplicare una transazione non porta con sé tok e sessione."""
+        tx = self._new_tx()
+        tx.sudo().write({
+            'nexi_contract_id': 'NCONTRATTO1',
+            'nexi_build_session': 'SESSIONE1',
+            'nexi_build_token': 'TOKEN1',
+            'nexi_masked_pan': '****1234',
+            'nexi_reconcile_count': 3,
+            'nexi_reverify_count': 2,
+            'nexi_uncertain': True,
+        })
+        clone = tx.copy({'reference': tx.reference + 'COPY'})
+        clone.invalidate_recordset()
+        self.assertNotEqual(clone.nexi_access_token, tx.nexi_access_token)
+        self.assertFalse(clone.nexi_contract_id)
+        self.assertFalse(clone.nexi_build_session)
+        self.assertFalse(clone.nexi_build_token)
+        self.assertFalse(clone.nexi_masked_pan)
+        self.assertEqual(clone.nexi_reconcile_count, 0)
+        self.assertEqual(clone.nexi_reverify_count, 0)
+        self.assertFalse(clone.nexi_uncertain)
+
+    def test_configured_public_base_wins_over_candidate(self):
+        """#10 L-B6: la base configurata vince su un base_url candidato."""
+        tx = self._new_tx()
+        self.provider.nexi_public_base = 'https://shop.example.com'
+        answer = {
+            'hostedPage': 'https://xpay.nexigroup.com/pay',
+            'securityToken': 't',
+        }
+        with patch.object(
+            type(self.provider), '_nexi_make_request', return_value=answer
+        ) as req:
+            tx._get_specific_rendering_values({
+                'amount': 10.0, 'currency_id': tx.currency_id.id,
+                'partner_id': self.partner.id, 'reference': tx.reference,
+                'should_tokenize': False,
+                'base_url': 'https://evil.example',
+            })
+        payload = req.call_args.kwargs.get('payload') or req.call_args.args[2]
+        result_url = payload['paymentSession']['resultUrl']
+        self.assertTrue(result_url.startswith('https://shop.example.com/'))
+        self.assertNotIn('evil.example', result_url)
+
+    def test_prepare_rechecks_cart_after_lock(self):
+        """#10 L-B5: il verdetto carrello viene ricalcolato dopo il lock."""
+        from odoo.addons.payment_nexi.controllers import main as nexi_main
+        from odoo.addons.payment_nexi.controllers.main import NexiController
+        nexi_main._NEXI_RL.clear()
+        self.provider.nexi_mode = 'build'
+        eur = self.currency_eur or self.provider.company_id.currency_id
+        pricelist = self.env['product.pricelist'].create({
+            'name': 'Nexi EUR smoke', 'currency_id': eur.id,
+        })
+        order = self.env['sale.order'].create({
+            'partner_id': self.partner.id,
+            'company_id': self.provider.company_id.id,
+            'pricelist_id': pricelist.id,
+        })
+        class FakeWebsite:
+            id = None
+            domain = ''
+            def sale_get_order(self):
+                return order
+        class FakeRequest:
+            env = self.env
+            website = FakeWebsite()
+            httprequest = None
+        controller = NexiController()
+        endpoint = NexiController.nexi_build_prepare.original_endpoint
+        with patch.object(nexi_main, 'request', FakeRequest()):
+            with patch.object(nexi_main, '_nexi_csrf_ok', return_value=True):
+                with patch.object(
+                    NexiController, '_nexi_order_ready',
+                    side_effect=[None, 'Ordine già pagato.'],
+                ) as check:
+                    res = endpoint(controller, method_code='card')
+        self.assertEqual(res, {'error': 'Ordine già pagato.'})
+        self.assertEqual(check.call_count, 2, 'prima e dopo il lock')
+
+    def test_json_csrf_requires_a_valid_token(self):
+        """#10 L-B9: Odoo 18 ignora csrf=True sui JSON, la rotta lo valida."""
+        from odoo.addons.payment_nexi.controllers import main as nexi_main
+        class FakeRequest:
+            def __init__(self, token, valid):
+                self.params = {'csrf_token': token}
+                self._valid = valid
+            def validate_csrf(self, token):
+                return self._valid and token == 'buono'
+        with patch.object(nexi_main, 'request', FakeRequest('buono', True)):
+            self.assertTrue(nexi_main._nexi_csrf_ok())
+        with patch.object(nexi_main, 'request', FakeRequest('cattivo', False)):
+            self.assertFalse(nexi_main._nexi_csrf_ok())
+        with patch.object(nexi_main, 'request', FakeRequest(None, True)):
+            self.assertFalse(nexi_main._nexi_csrf_ok())
+
+    def test_json_write_routes_require_csrf(self):
+        """#10 L-B9: le rotte JSON che scrivono non sono più esenti da CSRF."""
+        from odoo.addons.payment_nexi.controllers.main import NexiController
+        for name in ('nexi_saved_card', 'nexi_build_prepare',
+                     'nexi_build_jserror', 'nexi_build_finalize'):
+            with self.subTest(route=name):
+                routing = getattr(NexiController, name).original_routing
+                self.assertIs(routing.get('csrf'), True)
+        self.assertIs(NexiController.nexi_confirm.original_routing.get('csrf'), False)

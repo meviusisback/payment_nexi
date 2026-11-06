@@ -5,7 +5,7 @@
 **Odoo 18 payment provider for Nexi XPay Web (REST API with `X-Api-Key`): Hosted Page redirect or embedded card fields at checkout. Odoo never sees the card number.**
 
 [![License: LGPL-3](https://img.shields.io/github/license/meviusisback/payment_nexi)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.4.2-blue)
+![Version](https://img.shields.io/badge/version-1.4.3-blue)
 ![Linux](https://img.shields.io/badge/linux-supported-1793d1)
 
 ![Module icon](static/description/icon.png)
@@ -20,9 +20,9 @@ Selling online with Odoo on an Italian Nexi terminal means choosing between send
 
 - **Two checkout modes**: **Hosted Page** (redirect to the Nexi page) and **Embedded Build v3** (card fields inside the Odoo checkout, rendered as Nexi iframes).
 - **Server-side verification only**: the outcome is always re-checked with `GET /orders/{reference}` — the browser return is never trusted.
-- **Strict close-out**: the transaction becomes `done` only with an `EXECUTED` outcome and matching amount (compared in cents, same unit on both sides) and a matching currency (required, never skipped). The captured amount is read from the order total first, then from the operation, then from the sum of same-currency captures — decimal formats (euro) are converted, never rejected. Disagreeing operations without reliable dates stay `pending`. The only agreed close-out without dates is `cancel` when both `AUTHORIZATION` and `CAPTURE` are `DECLINED` — both sides agree nothing was taken.
-- **Reconciliation cron**: every 10 minutes the pending transactions older than 10 minutes are re-checked on Nexi with the same code as the confirmation route — a payment whose browser return and notification were both lost still closes by itself. Transient gateway errors stay `pending` for the cron; the HTTP path makes a single call.
-- **Explicit outcome mapping**: `AUTHORIZED` stays authorized-but-not-captured; `CANCELED`, `THREEDS_FAILED`, `DENIED`, `DENIED_BY_RISK`, `ERROR`, `DECLINED`, `FAILED` and `VOIDED` cancel the transaction; `THREEDS_VALIDATED` (3DS passed, payment still running) waits briefly like `PENDING`.
+- **Strict close-out**: the transaction becomes `done` only with an `EXECUTED` outcome, a matching currency (required, never skipped) and a captured amount **equal** to the expected one (compared in cents). A higher capture (e.g. a stale session paid twice) becomes `error` with captured-vs-expected in the log, for a manual refund from the Nexi back office. The captured amount is read from the order total first, then from the operation, then from the sum of same-currency captures — decimal formats (euro) are converted, never rejected. Without reliable dates, agreeing operations decide: both `EXECUTED` closes `done` after the amount/currency checks, both unpaid cancels; disagreeing operations stay `pending`.
+- **Reconciliation cron**: every 10 minutes the pending transactions older than 10 minutes are re-checked on Nexi with the same code as the confirmation route — a payment whose browser return and notification were both lost still closes by itself. Recent *uncertain* errors (4xx, orderId mismatch, missing currency, partial capture) are re-checked too, with a separate counter. Pending gives up after 72 attempts, uncertain errors after 12; at the cap an `ERROR` log names the reference and the last known captured/expected amount. Transient gateway errors stay `pending`; the HTTP path makes a single call.
+- **Explicit outcome mapping**: `AUTHORIZED` stays authorized-but-not-captured; `CANCELED`, `THREEDS_FAILED`, `DENIED`, `DENIED_BY_RISK`, `ERROR`, `DECLINED`, `FAILED`, `VOIDED` and `REFUNDED` cancel the transaction; `THREEDS_VALIDATED` (3DS passed, payment still running) waits briefly like `PENDING`.
 - **Seven payment methods** with per-terminal availability:
 
 | Method | Nexi code |
@@ -94,12 +94,12 @@ Behind a reverse proxy or load balancer, Odoo must see the real client address: 
 
 ## How it works
 
-Every transaction carries a random code (`tok`): without the right code the public routes answer "not found" without touching Nexi or the payment. The order to verify is decided by the transaction, never by the caller; the Nexi response must refer to the same order, and the amount is compared in cents. Nexi data (`contractId`, sessions, masked PAN) is written by the system only — external writes via RPC are rejected. Saved cards are visible to the owner **and to the other contacts of the same company** (the contract belongs to the commercial partner). Nexi notifications are counted per transaction, browser returns per IP; only generic messages reach the browser, details stay in the server logs.
+Every transaction carries a random code (`tok`): without the right code the public routes answer "not found" without touching Nexi or the payment. On JSON routes the code travels in the `X-Nexi-Token` header (the query string remains for Nexi return URLs and old links), and the Build page sends `Referrer-Policy: no-referrer`; strip `tok` from reverse-proxy access logs. The JSON write routes validate the session CSRF token explicitly, because Odoo 18 does not enforce `csrf=True` on the JSON dispatcher. The order to verify is decided by the transaction, never by the caller; the Nexi response must refer to the same order, and the amount is compared in cents. Nexi data (`contractId`, sessions, masked PAN) is written by the system only — external writes via RPC are rejected. Saved cards are visible to the owner **and to the other contacts of the same company** (the contract belongs to the commercial partner). Nexi notifications are counted per transaction, browser returns per IP; only generic messages reach the browser, details stay in the server logs.
 
 ```
 payment_nexi/
 ├── __init__.py                     # installation hook
-├── __manifest__.py                 # version 1.4.2, depends, data files
+├── __manifest__.py                 # version 1.4.3, depends, data files
 ├── controllers/main.py             # Nexi return + Build routes
 ├── data/payment_method_data.xml    # payment methods (Nexi-only codes; shared ones come from the core)
 ├── models/

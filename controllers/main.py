@@ -9,6 +9,10 @@ from odoo import http
 from odoo.http import request
 from odoo.exceptions import ValidationError
 
+from ..models.payment_provider import (
+    _nexi_clean_base_url,
+    _nexi_sanitize_text,
+)
 from ..models.payment_transaction import _nexi_lock_row, _nexi_safe_fields
 
 _logger = logging.getLogger(__name__)
@@ -22,6 +26,14 @@ BROWSER_LIMIT = 30
 # Notifiche Nexi: arrivano tutte dallo stesso IP del terminale e riguardano
 # clienti diversi, quindi si contano per transazione (tok) e non per IP.
 NOTIFY_LIMIT = 60
+# Tetto globale per worker: la rotazione di X-Forwarded-For non deve
+# trasformare i bucket per-IP in un modo per non essere mai limitati.
+GLOBAL_LIMIT = 1200
+_GLOBAL_KEY = 'nexi:global'
+
+
+def _nexi_global_allow():
+    return _nexi_rl_allow(_GLOBAL_KEY, GLOBAL_LIMIT)
 
 
 def _nexi_rl_allow(key, limit, window=60):
@@ -60,12 +72,65 @@ def _nexi_rl_key(name):
 
 
 def _nexi_tok():
-    """Codice della transazione: da query string o da body JSON."""
+    """Codice della transazione: header, body JSON, params o query string.
+
+    L'header è la forma preferita sulle rotte JSON (non finisce negli access
+    log); query e body restano per i return URL Nexi e per i vecchi link.
+    """
+    tok = None
     try:
-        tok = request.httprequest.args.get('tok')
+        tok = request.httprequest.headers.get('X-Nexi-Token')
     except Exception:
-        tok = None
-    return tok
+        pass
+    if not tok:
+        try:
+            data = request.get_json_data()
+        except Exception:
+            data = None
+        if isinstance(data, dict):
+            tok = data.get('tok')
+            params = data.get('params')
+            if not tok and isinstance(params, dict):
+                tok = params.get('tok')
+    if not tok:
+        try:
+            tok = request.params.get('tok')
+        except Exception:
+            pass
+    if not tok:
+        try:
+            tok = request.httprequest.args.get('tok')
+        except Exception:
+            pass
+    tok = str(tok or '').strip()
+    return tok[:128] or None
+
+
+def _nexi_csrf_ok():
+    """Odoo 18 non valida il CSRF sulle rotte type='json': lo faccio qui.
+
+    Il token vive in request.params (params JSON-RPC) e viene confrontato con
+    il segreto della sessione. Senza token la rotta non deve avere effetti.
+    """
+    try:
+        token = request.params.get('csrf_token')
+        return bool(token) and request.validate_csrf(token)
+    except Exception:
+        return False
+
+
+def _nexi_site_base(provider, website=None):
+    """Base pubblica configurata: mai Host o X-Forwarded-Proto."""
+    base = _nexi_clean_base_url(provider.nexi_public_base)
+    if not base and website is not None:
+        domain = (getattr(website, 'domain', '') or '').strip()
+        if domain:
+            if '://' not in domain:
+                domain = 'https://' + domain
+            base = _nexi_clean_base_url(domain)
+    if not base:
+        base = _nexi_clean_base_url(provider.get_base_url())
+    return base
 
 
 def _nexi_confirm_limit(is_notify, kw):
@@ -135,7 +200,7 @@ def _nexi_public_error(e, source='Nexi'):
     )
     if msg.startswith(safe):
         return msg[:200]
-    _logger.warning('%s errore interno: %s', source, msg[:300])
+    _logger.warning('%s errore interno: %s', source, _nexi_sanitize_text(msg))
     return 'Pagamento non disponibile. Riprova.'
 
 
@@ -235,14 +300,16 @@ class NexiController(http.Controller):
             )
         return providers.sorted(lambda p: (p.sequence, p.id))[:1]
 
-    @http.route('/payment/nexi/saved-card', type='json', auth='public', website=True, methods=['POST'], csrf=False)
+    @http.route('/payment/nexi/saved-card', type='json', auth='public', website=True, methods=['POST'], csrf=True)
     def nexi_saved_card(self, contract_id=None, **kw):
         """Ricorda quale carta salvata ha scelto il cliente per questo ordine.
 
         Il form di Odoo non porta campi extra fino al provider: la scelta
         viaggia in sessione e viene riletta in _get_specific_rendering_values.
         """
-        if not _nexi_rl_allow(_nexi_rl_key('saved'), 30):
+        if not _nexi_csrf_ok():
+            return {'error': 'Sessione scaduta. Ricarica la pagina.'}
+        if not _nexi_global_allow() or not _nexi_rl_allow(_nexi_rl_key('saved'), 30):
             return {'error': 'Troppe richieste. Riprova tra un minuto.'}
         order = request.website.sale_get_order()
         partner = (order.partner_invoice_id or order.partner_id) if order else request.env.user.partner_id
@@ -279,7 +346,7 @@ class NexiController(http.Controller):
         # browser invece resta limitato per IP.
         is_notify = request.httprequest.method == 'POST'
         key, limit = _nexi_confirm_limit(is_notify, kw)
-        if not _nexi_rl_allow(key, limit):
+        if not _nexi_global_allow() or not _nexi_rl_allow(key, limit):
             return request.make_response('Troppe richieste. Riprova tra un minuto.', status=429)
         # kw = parametri che Nexi aggiunge al ritorno (ref, cancel, ...).
         if is_notify and not kw.get('ref'):
@@ -330,7 +397,15 @@ class NexiController(http.Controller):
             # la verifica né la conferma.
             _logger.info('Nexi %s già chiusa e post-elaborata: salto.', tx.reference)
         else:
-            tx._process_notification_data(notify_data)
+            try:
+                tx._process_notification_data(notify_data)
+            except (ValueError, TypeError, KeyError, AttributeError,
+                    RecursionError, OverflowError):
+                # Forme gateway inattese: non un 500, ma una transizione
+                # incerta che il cron può ancora recuperare.
+                _logger.exception(
+                    'Nexi conferma %s: risposta non interpretabile', tx.reference)
+                tx._set_pending(state_message='Nexi risposta non valida. Riprova.')
             tx.invalidate_recordset()
             # Senza questo Odoo non conferma l'ordine ne' crea la fattura.
             if not tx.is_post_processed:
@@ -343,25 +418,45 @@ class NexiController(http.Controller):
 
     @http.route('/payment/nexi/build/<string:reference>', type='http', auth='public', website=True, methods=['GET'])
     def nexi_build(self, reference, **kw):
+        if not _nexi_global_allow() or not _nexi_rl_allow(_nexi_rl_key('build'), 30):
+            return request.make_response(
+                'Troppe richieste. Riprova tra un minuto.', status=429)
         tx = _nexi_tx_or_404(reference)
         if not tx or not tx.nexi_build_session:
             return request.not_found()
         host = 'https://xpaysandbox.nexigroup.com' if tx.provider_id.nexi_env == 'test' else 'https://xpay.nexigroup.com'
         tok = tx.nexi_access_token
-        return request.render('payment_nexi.build_page', {
+        response = request.render('payment_nexi.build_page', {
             'tx_reference': tx.reference,
             'nexi_sdk': host + '/monetaweb/resources/hfsdk.js',
             'build_session': tx.nexi_build_session,
             'build_token': tx.nexi_build_token or '',
-            'build_state_url': f'/payment/nexi/build/{tx.reference}/fields?tok={tok}',
-            'build_finalize_url': f'/payment/nexi/build/{tx.reference}/finalize?tok={tok}',
+            # Le rotte JSON prendono il tok dall'header, non dalla query.
+            'build_state_url': f'/payment/nexi/build/{tx.reference}/fields',
+            'build_finalize_url': f'/payment/nexi/build/{tx.reference}/finalize',
+            'build_tok': tok,
+            'csrf_token': request.csrf_token(),
             'confirm_url': f'/payment/nexi/confirm?ref={tx.reference}&tok={tok}',
         })
+        response.headers['Referrer-Policy'] = 'no-referrer'
+        return response
 
-    @http.route('/payment/nexi/build/prepare', type='json', auth='public', website=True, methods=['POST'], csrf=False)
+    @http.route('/payment/nexi/build/prepare', type='json', auth='public', website=True, methods=['POST'], csrf=True)
     def nexi_build_prepare(self, method_code='card', tokenize=False, provider_id=None, **kw):
         """Crea transazione + ordine Build e ridà campi o URL APM."""
-        if not _nexi_rl_allow(_nexi_rl_key('prepare'), 20):
+        # Il browser manda JSON: un id/metodo di tipo strano non deve far
+        # esplodere la ricerca ORM (500) ma essere rifiutato.
+        if not _nexi_csrf_ok():
+            return {'error': 'Sessione scaduta. Ricarica la pagina.'}
+        method_code = str(method_code or 'card').strip().lower()[:32] or 'card'
+        if provider_id not in (None, False, ''):
+            try:
+                provider_id = int(provider_id)
+            except (TypeError, ValueError):
+                return {'error': 'Metodo non disponibile su questo terminale.'}
+        else:
+            provider_id = None
+        if not _nexi_global_allow() or not _nexi_rl_allow(_nexi_rl_key('prepare'), 20):
             return {'error': 'Troppe richieste. Riprova tra un minuto.'}
         order = request.website.sale_get_order()
         # Le stesse porte che chiude la cassa Odoo: senza queste si poteva
@@ -377,6 +472,13 @@ class NexiController(http.Controller):
         if not self._nexi_lock_order(order):
             # Un altro pagamento sta già girando su questo ordine.
             return {'error': 'Pagamento già in corso. Riprova tra un istante.'}
+        # Il verdetto letto prima del lock può essere vecchio: dopo aver
+        # bloccato l'ordine lo ricalcolo, altrimenti due richieste possono
+        # creare due ordini Nexi sullo stesso carrello.
+        order.invalidate_recordset()
+        cart_error = self._nexi_order_ready(order)
+        if cart_error:
+            return {'error': cart_error}
         method = request.env['payment.method'].sudo().search(
             [('code', '=', method_code), ('is_primary', '=', True)], limit=1,
         )
@@ -387,11 +489,9 @@ class NexiController(http.Controller):
         if method not in provider.payment_method_ids or method._nexi_is_disabled(provider.id):
             return {'error': 'Metodo non disponibile su questo terminale.'}
         Tx = request.env['payment.transaction'].sudo()
-        # Host con cui il browser naviga (tunnel compreso): ultima spiaggia
-        # per merchantUrl, solo se https pubblico. Vale la base configurata.
-        origin = (request.httprequest.host_url or '').rstrip('/')
-        if request.httprequest.headers.get('X-Forwarded-Proto') == 'https' and origin.startswith('http://'):
-            origin = 'https://' + origin[len('http://'):]
+        # Base pubblica configurata (campo provider, dominio del sito, web.base.url).
+        # L'Host e X-Forwarded-Proto non decidono mai il merchantUrl.
+        origin = _nexi_site_base(provider, request.website)
         extra = {'base_url': origin} if origin else {}
         tx = Tx.search([
             ('sale_order_ids', 'in', order.id),
@@ -437,7 +537,7 @@ class NexiController(http.Controller):
                     # Loggo sempre: un errore nascosto qui spegne tutta la cassa.
                     _logger.warning(
                         'prepare: tx %s non creata (tentativo %s/5): %s',
-                        ref, _i + 1, str(e)[:200])
+                        ref, _i + 1, _nexi_sanitize_text(e, 200))
                     tx = None
                     time.sleep(0.05 * (_i + 1))
                     continue
@@ -507,31 +607,36 @@ class NexiController(http.Controller):
             'fields': res_cards.get('build_fields') or [],
             'buttons': res_buttons.get('build_fields') or [],
             'sdk': host + '/monetaweb/resources/hfsdk.js',
-            'finalize_url': f'/payment/nexi/build/{tx.reference}/finalize?tok={tok}',
+            # finalize è JSON: tok nell'header, non nella query.
+            'finalize_url': f'/payment/nexi/build/{tx.reference}/finalize',
+            'tok': tok,
             'confirm_url': f'/payment/nexi/confirm?ref={tx.reference}&tok={tok}',
         }
 
-    @http.route('/payment/nexi/build/jserror', type='json', auth='public', website=True, methods=['POST'], csrf=False)
+    @http.route('/payment/nexi/build/jserror', type='json', auth='public', website=True, methods=['POST'], csrf=True)
     def nexi_build_jserror(self, msg=None, **kw):
-        if not _nexi_rl_allow(_nexi_rl_key('jserror'), 10):
+        # Senza token non loggo niente: il token arriva dai nostri handler JS.
+        if not _nexi_csrf_ok():
             return True
-        # Una riga sola, niente caratteri di controllo: i log restano puliti.
-        clean = str(msg or '').replace('\r', ' ').replace('\n', ' ')[:300]
+        if not _nexi_global_allow() or not _nexi_rl_allow(_nexi_rl_key('jserror'), 10):
+            return True
+        # Una riga sola, niente ANSI/bidi/control: i log restano puliti.
+        clean = _nexi_sanitize_text(msg)
         _logger.warning('browser: %s', clean)
         return True
 
     @http.route('/payment/nexi/build/<string:reference>/fields', type='http', auth='public', website=True, methods=['GET'])
     def nexi_build_fields(self, reference, **kw):
         """Solo i campi da mostrare, mai la risposta grezza di Nexi."""
-        tx = _nexi_tx_or_404(reference)
-        if not tx or not tx.nexi_build_session:
-            return request.not_found()
-        # Anche questa rotta spende una chiamata al terminale: la conto come le
-        # altre, altrimenti un cliente può far girare la chiave a vuoto.
-        if not _nexi_rl_allow(_nexi_rl_key('fields'), 30):
+        # Limite PRIMA della lookup: altrimenti un flood senza tok fa
+        # comunque una ricerca sudo per ogni richiesta.
+        if not _nexi_global_allow() or not _nexi_rl_allow(_nexi_rl_key('fields'), 30):
             return request.make_response(
                 json.dumps({'fields': []}), [('Content-Type', 'application/json')], status=429
             )
+        tx = _nexi_tx_or_404(reference)
+        if not tx or not tx.nexi_build_session:
+            return request.not_found()
         provider = tx.provider_id
         base = provider._nexi_build_url().rsplit('/orders/build', 1)[0]
         try:
@@ -541,10 +646,12 @@ class NexiController(http.Controller):
             )
         except Exception:
             return request.make_response(json.dumps({'fields': []}), [('Content-Type', 'application/json')])
+        data = data if isinstance(data, dict) else {}
         # Whitelist: solo id/classe/tipo/src degli iframe, niente operation, e
         # solo src su dominio Nexi (sono gli iframe in cui si digita la carta).
         out = []
-        fs = (data or {}).get('fieldSet') or {}
+        fs = data.get('fieldSet')
+        fs = fs if isinstance(fs, dict) else {}
         for f in _nexi_safe_fields(fs.get('fields')):
             if not f.get('src'):
                 continue
@@ -559,10 +666,12 @@ class NexiController(http.Controller):
             [('Content-Type', 'application/json')],
         )
 
-    @http.route('/payment/nexi/build/<string:reference>/finalize', type='json', auth='public', methods=['POST'], csrf=False)
+    @http.route('/payment/nexi/build/<string:reference>/finalize', type='json', auth='public', methods=['POST'], csrf=True)
     def nexi_build_finalize(self, reference, **kw):
         """Chiama finalize su Nexi (la chiave resta sul server). Torna url o fine."""
-        if not _nexi_rl_allow(_nexi_rl_key('finalize'), 30):
+        if not _nexi_csrf_ok():
+            return {'error': 'Sessione scaduta. Ricarica la pagina.'}
+        if not _nexi_global_allow() or not _nexi_rl_allow(_nexi_rl_key('finalize'), 30):
             return {'error': 'Troppe richieste. Riprova tra un minuto.'}
         tx = _nexi_tx_or_404(reference)
         if not tx or not tx.nexi_build_session:
@@ -582,7 +691,8 @@ class NexiController(http.Controller):
                 tx.nexi_build_session = False
                 tx.nexi_build_token = False
             return {'error': _nexi_public_error(e)}
-        url = (data or {}).get('url')
+        data = data if isinstance(data, dict) else {}
+        url = data.get('url')
         if url and not _nexi_check_url(url):
             _logger.warning('finalize: URL scartato per %s', tx.reference)
             return {'error': 'Pagamento non disponibile. Riprova.'}

@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Provider Nexi XPay Web. Solo redirect (Hosted Page). Niente dati carta in Odoo."""
 import logging
+import re
+import time
 import uuid
 from urllib.parse import urlparse
 
@@ -10,6 +12,86 @@ from odoo import _, fields, models
 from odoo.exceptions import ValidationError
 
 _logger = logging.getLogger(__name__)
+
+# Impossibile tenere un worker sync appeso a un gateway che sgocciola:
+# il timeout di requests è per singola lettura, non per la risposta intera.
+NEXI_TOTAL_TIMEOUT = 20
+# Le risposte Nexi sono piccole: un corpo enorme è un attacco, non un ordine.
+NEXI_MAX_BODY = 1024 * 1024
+
+_ANSI_RE = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
+_BIDI_RE = re.compile('[\u202a-\u202e\u2066-\u2069\u200e\u200f]')
+_CTRL_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]')
+
+
+def _nexi_sanitize_text(value, limit=300):
+    """Testo gateway pronto per un log: una riga, senza ANSI/bidi/control."""
+    text = _ANSI_RE.sub('', str(value or ''))
+    text = _BIDI_RE.sub('', text)
+    text = _CTRL_RE.sub(' ', text)
+    text = text.replace('\r', ' ').replace('\n', ' ').replace('\t', ' ')
+    return re.sub(r'\s+', ' ', text).strip()[:limit]
+
+
+def _nexi_clean_base_url(value):
+    """Base pubblica https valida, o stringa vuota.
+
+    Non si usa mai l'Host della richiesta: un proxy che non sanitizza gli
+    header potrebbe far finire i return URL su un dominio scelto dall'attaccante.
+    """
+    text = str(value or '').strip().rstrip('/')
+    if not text:
+        return ''
+    if any(ch in text for ch in ('\\', ' ', '\t', '\r', '\n', '\x00')):
+        return ''
+    try:
+        parts = urlparse(text)
+        host = (parts.hostname or '').lower()
+        port = parts.port
+    except ValueError:
+        return ''
+    if (parts.scheme or '').lower() != 'https' or not host:
+        return ''
+    if parts.username or parts.password or '@' in (parts.netloc or ''):
+        return ''
+    if port not in (None, 443):
+        return ''
+    if host in ('localhost', '127.0.0.1', '::1') or host.endswith('.localhost'):
+        return ''
+    return ('https://' + parts.netloc + (parts.path or '')).rstrip('/')
+
+
+def _nexi_base_allowed(value, allowed_hosts):
+    """True se l'host della base è fra quelli configurati per il sito."""
+    try:
+        host = (urlparse(str(value or '')).hostname or '').lower()
+    except ValueError:
+        return False
+    return bool(host) and host in {str(h or '').lower() for h in allowed_hosts}
+
+
+def _nexi_read_limited(resp, max_bytes=NEXI_MAX_BODY, deadline=None, now=time.monotonic):
+    """Legge il corpo a blocchi, con tetto di byte e scadenza complessiva."""
+    length = resp.headers.get('Content-Length')
+    if length:
+        try:
+            if int(length) > max_bytes:
+                raise NexiUnavailable(_('Nexi risposta non valida. Riprova.'))
+        except (TypeError, ValueError):
+            pass
+    chunks = []
+    total = 0
+    for chunk in resp.iter_content(8192):
+        if deadline is not None and now() > deadline:
+            raise NexiUnavailable(_('Nexi non raggiungibile. Riprova.'))
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > max_bytes:
+            raise NexiUnavailable(_('Nexi risposta non valida. Riprova.'))
+        chunks.append(chunk)
+    return b''.join(chunks)
+
 
 # Domini Nexi ammessi. Solo questi, resto rifiutato.
 # xpay.nexigroup.com = produzione, xpaysandbox.nexigroup.com = test.
@@ -128,13 +210,14 @@ def is_nexi_url(url):
 def _nexi_error_detail(resp):
     """Prima descrizione utile da Nexi, senza dati sensibili."""
     try:
-        errs = (resp.json() or {}).get('errors') or []
-        if errs and isinstance(errs[0], dict):
-            desc = str(errs[0].get('description') or '')
-            code = str(errs[0].get('code') or '')
+        payload = resp.json() or {}
+        errs = payload.get('errors') if isinstance(payload, dict) else None
+        if isinstance(errs, list) and errs and isinstance(errs[0], dict):
+            desc = _nexi_sanitize_text(errs[0].get('description'), 160)
+            code = _nexi_sanitize_text(errs[0].get('code'), 16)
             if desc:
-                return '%s [%s]' % (desc[:160], code[:16]) if code else desc[:160]
-    except (ValueError, AttributeError):
+                return '%s [%s]' % (desc, code) if code else desc
+    except (ValueError, AttributeError, RecursionError, OverflowError):
         pass
     return 'errore. Riprova.'
 
@@ -142,10 +225,11 @@ def _nexi_error_detail(resp):
 def _nexi_error_code(resp):
     """Codice errore Nexi, se la risposta ne porta uno."""
     try:
-        errs = (resp.json() or {}).get('errors') or []
-        if errs and isinstance(errs[0], dict):
-            return str(errs[0].get('code') or '')[:16] or None
-    except (ValueError, AttributeError):
+        payload = resp.json() or {}
+        errs = payload.get('errors') if isinstance(payload, dict) else None
+        if isinstance(errs, list) and errs and isinstance(errs[0], dict):
+            return _nexi_sanitize_text(errs[0].get('code'), 16) or None
+    except (ValueError, AttributeError, RecursionError, OverflowError):
         pass
     return None
 
@@ -368,25 +452,49 @@ class PaymentProviderNexi(models.Model):
             'X-Api-Key': self.nexi_api_key or '',
             'Correlation-Id': str(uuid.uuid4()),
         }
+        deadline = time.monotonic() + NEXI_TOTAL_TIMEOUT
         try:
             # Niente redirect: la chiave non deve mai viaggiare su un altro host.
-            resp = requests.request(method, url, json=payload, params=params, headers=headers, timeout=(5, 15), allow_redirects=False)
+            # stream=True + _nexi_read_limited: il timeout di requests è per
+            # singola lettura, non ferma un gateway che manda un byte alla volta.
+            resp = requests.request(
+                method, url, json=payload, params=params, headers=headers,
+                timeout=(5, 15), allow_redirects=False, stream=True,
+            )
         except requests.exceptions.RequestException:
             _logger.exception('Nexi non raggiungibile: %s', url)
             raise NexiUnavailable(_('Nexi non raggiungibile. Riprova.'))
-        if 300 <= (resp.status_code or 0) < 400:
-            _logger.warning('Nexi redirect inatteso %s -> %s', url, resp.headers.get('Location'))
-            raise NexiUnavailable(_('Nexi risposta non valida. Riprova.'))
         try:
-            resp.raise_for_status()
-        except requests.exceptions.HTTPError:
-            _logger.error('Nexi %s %s -> %s', method, url, (resp.text or '')[:500])
-            raise NexiApiError(
-                _('Nexi: %s') % _nexi_error_detail(resp),
-                status_code=resp.status_code,
-                gateway_code=_nexi_error_code(resp),
-            )
-        try:
-            return resp.json() if resp.text else {}
-        except ValueError:
-            raise NexiUnavailable(_('Nexi risposta non valida. Riprova.'))
+            if 300 <= (resp.status_code or 0) < 400:
+                _logger.warning(
+                    'Nexi redirect inatteso %s -> %s',
+                    url, _nexi_sanitize_text(resp.headers.get('Location'), 300),
+                )
+                raise NexiUnavailable(_('Nexi risposta non valida. Riprova.'))
+            try:
+                raw = _nexi_read_limited(resp, deadline=deadline)
+            except requests.exceptions.RequestException:
+                _logger.exception('Nexi lettura interrotta: %s', url)
+                raise NexiUnavailable(_('Nexi non raggiungibile. Riprova.'))
+            # Il resto del metodo usa resp.text/resp.json(): tengo il corpo
+            # già letto (e limitato) nel Response.
+            resp._content = raw
+            resp._content_consumed = True
+            try:
+                resp.raise_for_status()
+            except requests.exceptions.HTTPError:
+                _logger.error(
+                    'Nexi %s %s -> %s', method, url,
+                    _nexi_sanitize_text(resp.text, 500),
+                )
+                raise NexiApiError(
+                    _('Nexi: %s') % _nexi_error_detail(resp),
+                    status_code=resp.status_code,
+                    gateway_code=_nexi_error_code(resp),
+                )
+            try:
+                return resp.json() if resp.text else {}
+            except (ValueError, RecursionError, OverflowError):
+                raise NexiUnavailable(_('Nexi risposta non valida. Riprova.'))
+        finally:
+            resp.close()

@@ -16,12 +16,15 @@
     <html>
       <head><title>Paga con Nexi</title>
         <meta name="viewport" content="width=device-width, initial-scale=1"/>
+        <meta name="referrer" content="no-referrer"/>
         <link rel="stylesheet" href="/web/static/lib/bootstrap/css/bootstrap.min.css"/>
       </head>
       <body>
       <div class="container mt-4 mb-5" id="nexi-build-box"
            t-att-data-fields="build_state_url"
            t-att-data-finalize="build_finalize_url"
+           t-att-data-tok="build_tok"
+           t-att-data-csrf="csrf_token"
            t-att-data-confirm="confirm_url">
         <h3>Paga con Nexi</h3>
         <p class="text-muted">Paghi senza uscire dal sito. I dati carta restano su Nexi.</p>
@@ -40,12 +43,18 @@
         <p class="mt-3"><a href="/shop/payment">Torna alla cassa</a></p>
       </div>
       <script type="text/javascript" t-att-src="nexi_sdk"></script>
-      <div id="nexi-build-urls" class="d-none" t-att-data-finalize="build_finalize_url" t-att-data-confirm="confirm_url"></div>
+      <div id="nexi-build-urls" class="d-none"
+           t-att-data-finalize="build_finalize_url"
+           t-att-data-tok="build_tok"
+           t-att-data-csrf="csrf_token"
+           t-att-data-confirm="confirm_url"></div>
       <script type="text/javascript">
         (function () {
           var _u = document.getElementById('nexi-build-urls') || {};
           var FINALIZE_URL = (_u.dataset || {}).finalize || '';
           var CONFIRM_URL = (_u.dataset || {}).confirm || '';
+          var TOK = (_u.dataset || {}).tok || '';
+          var CSRF = (_u.dataset || {}).csrf || '';
           function fail(msg) {
             var e = document.getElementById('nexi-build-error');
             e.textContent = msg; e.classList.remove('d-none');
@@ -57,7 +66,8 @@
               var x = new URL(u, window.location.href);
               if (x.protocol !== 'https:') { return false; }
               var h = x.hostname.toLowerCase();
-              return h === 'xpay.nexigroup.com' || h === 'xpaysandbox.nexigroup.com';
+              return h === 'xpay.nexigroup.com' || h.endsWith('.xpay.nexigroup.com')
+                || h === 'xpaysandbox.nexigroup.com' || h.endsWith('.xpaysandbox.nexigroup.com');
             } catch (e) { return false; }
           }
           function iframeFor(f, height) {
@@ -99,8 +109,8 @@
           function finalize() {
             fetch(FINALIZE_URL, {
               method: 'POST',
-              headers: {'Content-Type': 'application/json'},
-              body: '{}',
+              headers: {'Content-Type': 'application/json', 'X-Nexi-Token': TOK},
+              body: JSON.stringify({jsonrpc: '2.0', id: 1, params: {csrf_token: CSRF}}),
             }).then(function (r) { return r.json(); }
             ).then(function (res) {
               var r = (res &amp;&amp; res.result) || res || {};
@@ -127,6 +137,8 @@
       <div class="container mt-4 mb-5" id="nexi-build-box"
            t-att-data-fields="build_state_url"
            t-att-data-finalize="build_finalize_url"
+           t-att-data-tok="build_tok"
+           t-att-data-csrf="csrf_token"
            t-att-data-confirm="confirm_url">
         <h3>Paga con Nexi</h3>
         <p class="text-muted">Paghi senza uscire dal sito. I dati carta restano su Nexi.</p>
@@ -150,6 +162,8 @@
           var FIELDS_URL = _d.fields || '';
           var FINALIZE_URL = _d.finalize || '';
           var CONFIRM_URL = _d.confirm || '';
+          var TOK = _d.tok || '';
+          var CSRF = _d.csrf || '';
           function fail(msg) {
             var e = document.getElementById('nexi-build-error');
             e.textContent = msg; e.classList.remove('d-none');
@@ -161,7 +175,8 @@
               var x = new URL(u, window.location.href);
               if (x.protocol !== 'https:') { return false; }
               var h = x.hostname.toLowerCase();
-              return h === 'xpay.nexigroup.com' || h === 'xpaysandbox.nexigroup.com';
+              return h === 'xpay.nexigroup.com' || h.endsWith('.xpay.nexigroup.com')
+                || h === 'xpaysandbox.nexigroup.com' || h.endsWith('.xpaysandbox.nexigroup.com');
             } catch (e) { return false; }
           }
           function iframeFor(f, height) {
@@ -188,10 +203,12 @@
             });
             if (!box.children.length) fail('Nessun metodo disponibile su questo terminale.');
           }
-          fetch(FIELDS_URL, {headers: {'Accept': 'application/json'}}).then(function (r) {
+          fetch(FIELDS_URL, {
+            headers: {'Accept': 'application/json', 'X-Nexi-Token': TOK},
+          }).then(function (r) {
             return r.json();
           }).then(function (data) {
-            var fs = data.fieldSet || data;
+            var fs = (data &amp;&amp; data.fieldSet) || data || {};
             showMethods(fs.fields);
           }).catch(function () { fail('Metodi non caricati. Riprova.'); });
           var build = null;
@@ -221,8 +238,8 @@
           function finalize() {
             fetch(FINALIZE_URL, {
               method: 'POST',
-              headers: {'Content-Type': 'application/json'},
-              body: '{}',
+              headers: {'Content-Type': 'application/json', 'X-Nexi-Token': TOK},
+              body: JSON.stringify({jsonrpc: '2.0', id: 1, params: {csrf_token: CSRF}}),
             }).then(function (r) { return r.json(); }
             ).then(function (res) {
               var r = (res &amp;&amp; res.result) || res || {};
@@ -317,7 +334,7 @@
     <field name="arch" type="xml">
       <xpath expr="//div[p[@name='o_payment_secured_by']]" position="after">
         <t t-set="nexi_cards" t-value="pm_sudo.code == 'card' and provider_sudo.code == 'nexi' and provider_sudo.nexi_mode != 'build' and request.env['payment.transaction'].sudo().get_nexi_saved_cards(partner_id, provider_sudo.id) or []"/>
-        <div t-if="nexi_cards" class="d-flex flex-column gap-1 mt-2">
+        <div t-if="nexi_cards" id="nexi-saved-cards" t-att-data-csrf="request.csrf_token()" class="d-flex flex-column gap-1 mt-2">
           <div class="small text-600">Le tue carte</div>
           <t t-foreach="nexi_cards" t-as="nc">
             <label class="d-flex align-items-center gap-2 fw-normal">
@@ -333,13 +350,14 @@
             (function () {
               // Il form di Odoo non porta campi suoi fino al provider: la scelta
               // la salvo in sessione e il server la rilegge quando crea l'ordine.
+              var CSRF = ((document.getElementById('nexi-saved-cards') || {}).dataset || {}).csrf || '';
               var pending = 0;
               function send(contract) {
                 pending += 1;
                 return fetch('/payment/nexi/saved-card', {
                   method: 'POST',
                   headers: {'Content-Type': 'application/json'},
-                  body: JSON.stringify({jsonrpc: '2.0', id: 1, params: {contract_id: contract || ''}}),
+                  body: JSON.stringify({jsonrpc: '2.0', id: 1, params: {contract_id: contract || '', csrf_token: CSRF}}),
                 }).catch(function () {}).then(function () { pending -= 1; });
               }
               // Non lascio partire il pagamento mentre la scelta sta ancora
@@ -529,7 +547,7 @@
                  il JS, e solo quando è selezionata una riga Nexi: lo stesso
                  bottone serve agli altri provider. */
             </style>
-            <div id="nexi-inline" class="w-100 d-none">
+            <div id="nexi-inline" class="w-100 d-none" t-att-data-csrf="request.csrf_token()">
               <div id="nexi-inline-fields">
                 <p class="small text-muted">Carico i campi carta…</p>
               </div>
@@ -543,6 +561,10 @@
             <script>
             (function () {
               var done = false;
+              function nexiCsrf() {
+                var b = document.getElementById('nexi-inline');
+                return (b &amp;&amp; b.dataset.csrf) || '';
+              }
               // I loghi dei metodi nascono lazy dentro un contenitore stretto e
               // restano 0x0: forzo il caricamento e tolgo l'altezza 1px.
               document.querySelectorAll('li[name=o_payment_option] img').forEach(function (im) {
@@ -558,7 +580,7 @@
                   fetch('/payment/nexi/build/jserror', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({msg: 'ERR:' + String((e &amp;&amp; e.message) || e).slice(0, 300)}),
+                    body: JSON.stringify({jsonrpc: '2.0', id: 1, params: {msg: 'ERR:' + String((e &amp;&amp; e.message) || e).slice(0, 300), csrf_token: nexiCsrf()}}),
                   }).catch(function () {});
                 } catch (ee) {}
               });
@@ -567,7 +589,7 @@
                   fetch('/payment/nexi/build/jserror', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({msg: 'REJ:' + String((e &amp;&amp; e.reason) || e).slice(0, 300)}),
+                    body: JSON.stringify({jsonrpc: '2.0', id: 1, params: {msg: 'REJ:' + String((e &amp;&amp; e.reason) || e).slice(0, 300), csrf_token: nexiCsrf()}}),
                   }).catch(function () {});
                 } catch (ee) {}
               });
@@ -628,7 +650,8 @@
                   var x = new URL(u, window.location.href);
                   if (x.protocol !== 'https:') { return false; }
                   var h = x.hostname.toLowerCase();
-                  return h === 'xpay.nexigroup.com' || h === 'xpaysandbox.nexigroup.com';
+                  return h === 'xpay.nexigroup.com' || h.endsWith('.xpay.nexigroup.com')
+                    || h === 'xpaysandbox.nexigroup.com' || h.endsWith('.xpaysandbox.nexigroup.com');
                 } catch (e) { return false; }
               }
               function iframeFor(f, height) {
@@ -676,13 +699,14 @@
                 fetch('/payment/nexi/build/prepare', {
                   method: 'POST',
                   headers: {'Content-Type': 'application/json'},
-                  body: JSON.stringify({jsonrpc: '2.0', id: 1, params: {}}),
+                  body: JSON.stringify({jsonrpc: '2.0', id: 1, params: {csrf_token: nexiCsrf()}}),
                 }).then(function (r) { return r.json(); }
                 ).then(function (res) {
                   var r = (res &amp;&amp; res.result) || res || {};
                   if (r.error) { done = false; fail(r.error || 'Form non caricato. Riprova.'); return; }
                   box.dataset.preparedAt = String(Date.now());
                   box.dataset.finalize = r.finalize_url;
+                  box.dataset.tok = r.tok || '';
                   box.dataset.confirm = r.confirm_url;
                   var fb = document.getElementById('nexi-inline-fields');
                   fb.innerHTML = '';
@@ -719,7 +743,7 @@
                   loadSdk(r.sdk, initBuild);
                 }).catch(function () { done = false; fail('Form non caricato. Riprova.'); });
               }
-              var BTNMAP = {googlepay: 'GOOGLEPAY', applepay: 'APPLEPAY', bancomatpay: 'BANCOMATPAY', mybank: 'MYBANK', paypal: 'PAYPAL'};
+              var BTNMAP = {googlepay: 'GOOGLEPAY', applepay: 'APPLEPAY', bancomatpay: 'BANCOMATPAY', mybank: 'MYBANK', paypal: 'PAYPAL', paypal_bnpl: 'PAYPAL_PAGAIN3'};
               // Nascondo le righe il cui metodo Nexi non offre davvero.
               function hideUnavailable(buttons) {
                 var ids = {};
@@ -749,7 +773,7 @@
                         fetch('/payment/nexi/build/jserror', {
                           method: 'POST',
                           headers: {'Content-Type': 'application/json'},
-                          body: JSON.stringify({jsonrpc: '2.0', id: 1, params: {msg: 'onBuildError ' + txt}}),
+                          body: JSON.stringify({jsonrpc: '2.0', id: 1, params: {msg: 'onBuildError ' + txt, csrf_token: nexiCsrf()}}),
                         });
                       } catch (e2) {}
                       var info = d || {};
@@ -811,7 +835,20 @@
                 }
               }
               function fieldError(fieldId, msg) {
-                var wrap = document.querySelector('[data-nexi-field="' + fieldId + '"]');
+                var id = String(fieldId == null ? '' : fieldId);
+                var wrap = null;
+                try {
+                  var esc = (window.CSS &amp;&amp; CSS.escape) ? CSS.escape(id) : id.replace(/["\\]/g, '\\$&amp;');
+                  wrap = document.querySelector('[data-nexi-field="' + esc + '"]');
+                } catch (e) {}
+                if (!wrap) {
+                  // Fallback senza selettore costruito: un id ostile non deve
+                  // poter bloccare la UI con un SyntaxError.
+                  var all = document.querySelectorAll('[data-nexi-field]');
+                  for (var i = 0; i &lt; all.length; i += 1) {
+                    if (all[i].getAttribute('data-nexi-field') === id) { wrap = all[i]; break; }
+                  }
+                }
                 if (!wrap) return;
                 var hint = wrap.querySelector('.nexi-field-error');
                 if (!hint) {
@@ -828,8 +865,11 @@
               function finalize(box) {
                 fetch(box.dataset.finalize, {
                   method: 'POST',
-                  headers: {'Content-Type': 'application/json'},
-                  body: '{}',
+                  headers: {'Content-Type': 'application/json', 'X-Nexi-Token': box.dataset.tok || ''},
+                  body: JSON.stringify({
+                    jsonrpc: '2.0', id: 1,
+                    params: {csrf_token: box.dataset.csrf || nexiCsrf()},
+                  }),
                 }).then(function (r) { return r.json(); }
                 ).then(function (res) {
                   var r = (res &amp;&amp; res.result) || res || {};
@@ -865,22 +905,39 @@
                 if (!row) return;
                 var apm = row.querySelector('.nexi-apm-row');
                 if (!apm || apm.dataset.busy) return;
-                apm.dataset.busy = '1';
                 var code = apm.dataset.methodCode;
-                if (!code) return;
+                if (!code) {
+                  // Controllo PRIMA di occupare il flag: prima restava
+                  // inchiodato e il metodo non ripartiva più.
+                  toast('Metodo non disponibile. Riprova.');
+                  return;
+                }
+                apm.dataset.busy = '1';
+                var release = function () { delete apm.dataset.busy; };
                 fetch('/payment/nexi/build/prepare', {
                   method: 'POST',
                   headers: {'Content-Type': 'application/json'},
-                  body: JSON.stringify({jsonrpc: '2.0', id: 1, params: {method_code: code}}),
+                  body: JSON.stringify({
+                    jsonrpc: '2.0', id: 1,
+                    params: {method_code: code, csrf_token: nexiCsrf()},
+                  }),
                 }).then(function (r) { return r.json(); }
                 ).then(function (res) {
                   var r = (res &amp;&amp; res.result) || res || {};
-                  if (r.url) { if (!nexiUrlOk(r.url)) { fail('Risposta Nexi non valida.'); return; } window.location.href = r.url; return; }
-                  delete apm.dataset.busy;
+                  if (r.url) {
+                    if (!nexiUrlOk(r.url)) {
+                      release();
+                      toast('Risposta Nexi non valida.');
+                      return;
+                    }
+                    window.location.href = r.url;
+                    return;
+                  }
+                  release();
                   if (r.hide) { row.style.setProperty('display', 'none', 'important'); }
                   toast(r.error || 'Metodo non disponibile. Riprova.');
                 }).catch(function () {
-                  delete apm.dataset.busy;
+                  release();
                   toast('Metodo non disponibile. Riprova.');
                 });
               });
