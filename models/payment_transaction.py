@@ -225,6 +225,15 @@ def _nexi_decide_operation(data):
     return {}, 'uncertain'
 
 
+def _nexi_verify_url(provider, order_ref):
+    """URL di verifica di un ordine: base del terminale + /orders/{ref}."""
+    from urllib.parse import quote
+    create_url = provider._nexi_base_url()
+    if '/orders/hpp' in create_url:
+        return create_url.replace('/orders/hpp', f'/orders/{quote(order_ref, safe="")}')
+    return create_url.rstrip('/') + f'/orders/{quote(order_ref, safe="")}'
+
+
 def _nexi_session_choice():
     """Scelta carta salvata fatta in cassa, se questa richiesta ha una sessione.
 
@@ -636,9 +645,15 @@ class PaymentTransactionNexi(models.Model):
         # è del gateway: va encodato come valore, mai concatenato, altrimenti
         # un '&' suo diventa un parametro in più nel form.
         from urllib.parse import urlencode, urlparse, parse_qsl
-        if token and 'securityToken' not in hosted:
+        if token:
             parts = urlparse(hosted)
             query = parse_qsl(parts.query, keep_blank_values=True)
+            embedded = [v for k, v in query if k.lower() == 'securitytoken']
+            if embedded and embedded[0] != str(token):
+                # La pagina portava già un token diverso: vale quello del
+                # campo dedicato, mai quello dentro l'URL.
+                _logger.warning('Nexi ordine %s: securityToken nella pagina scartato.', self.reference)
+            query = [(k, v) for k, v in query if k.lower() != 'securitytoken']
             query.append(('securityToken', str(token)))
             hosted = parts._replace(query=urlencode(query)).geturl()
         _logger.info('Nexi ordine %s creato.', self.reference)
@@ -714,6 +729,26 @@ class PaymentTransactionNexi(models.Model):
             raise ValidationError(_('Ritorno Nexi non valido.'))
         return tx
 
+    def _nexi_probe_paid(self, order_ref):
+        """True se l'ordine Nexi risulta pagato, senza toccare lo stato.
+
+        Sonda di sola lettura per la riconciliazione: un ordine che non
+        esiste o non e' pagato vale False, mai un errore.
+        """
+        self.ensure_one()
+        try:
+            data = self.provider_id._nexi_make_request(
+                'GET', _nexi_verify_url(self.provider_id, order_ref))
+        except Exception:
+            return False
+        got_order = ((data or {}).get('orderId')
+                     or ((data or {}).get('orderStatus') or {}).get('order', {}).get('orderId')
+                     or '')
+        if got_order != order_ref:
+            return False
+        op, _kind = _nexi_decide_operation(data)
+        return is_paid(((op or {}).get('operationResult') or '').upper())
+
     @api.model
     def _nexi_reconcile_pending(self, limit=20):
         """Riverifica le transazioni Nexi rimaste appese.
@@ -747,6 +782,17 @@ class PaymentTransactionNexi(models.Model):
                     # il path HTTP fa una sola GET per non tenere il worker.
                     tx._process_notification_data({'nexi_retry': True})
                     tx.invalidate_recordset()
+                    if tx.state == 'pending' and tx.provider_id.nexi_mode == 'build':
+                        # Il prepare Build crea anche l'ordine dei bottoni APM
+                        # (reference-m): se e' lui quello pagato, chiude lui.
+                        # La sonda non tocca mai lo stato: se l'ordine bottoni
+                        # non e' pagato (o non esiste) non succede niente.
+                        if tx._nexi_probe_paid(tx.reference + '-m'):
+                            tx._process_notification_data({
+                                'nexi_retry': True,
+                                'nexi_order_ref': tx.reference + '-m',
+                            })
+                            tx.invalidate_recordset()
                     if tx.state in ('done', 'cancel', 'error') and not tx.is_post_processed:
                         tx._post_process()
                         tx.invalidate_recordset()
@@ -764,11 +810,14 @@ class PaymentTransactionNexi(models.Model):
         # Chiuse ma non post-elaborate (_post_process fallita dopo _set_done):
         # senza questo passaggio resterebbero ferme per sempre, perché la
         # search sopra copre solo le pending. Escluse quelle appena trattate:
-        # il loro _post_process è già stato tentato nel primo giro.
+        # il loro _post_process è già stato tentato nel primo giro. Stesso
+        # cutoff del primo giro: al primo deploy il cron non deve masticare
+        # mesi di history prima delle transazioni fresche.
         leftovers = self.search([
             ('provider_code', '=', 'nexi'),
             ('state', 'in', ['done', 'cancel', 'error']),
             ('is_post_processed', '=', False),
+            ('create_date', '<', cutoff),
             ('nexi_reconcile_count', '<', 72),
             ('id', 'not in', stuck.ids),
         ], order='nexi_reconcile_count, create_date', limit=limit)
@@ -785,7 +834,16 @@ class PaymentTransactionNexi(models.Model):
             except Exception:
                 _logger.exception('Nexi post-elaborazione %s KO', tx.reference)
             finally:
-                tx.sudo().write({'nexi_reconcile_count': (tx.nexi_reconcile_count or 0) + 1})
+                count = (tx.nexi_reconcile_count or 0) + 1
+                tx.sudo().write({'nexi_reconcile_count': count})
+                if count >= 72 and not tx.is_post_processed:
+                    # Ultimo giro: da qui la transazione esce dal giro da
+                    # sola, chiusa ma mai post-elaborata. Un errore nei log,
+                    # una volta sola, invece del silenzio.
+                    _logger.error(
+                        'Nexi %s: chiusa (%s) ma mai post-elaborata dopo %s tentativi, '
+                        'serve un intervento manuale.', tx.reference, tx.state, count,
+                    )
         return len(stuck) + len(leftovers)
 
 
@@ -805,18 +863,13 @@ class PaymentTransactionNexi(models.Model):
             return
         # Non fidarti di cancel in URL: verifica sempre su Nexi.
         provider = self.provider_id
-        create_url = provider._nexi_base_url()
         # L'ordine da controllare lo decide la transazione, mai chi chiama.
         raw_ref = (notification_data or {}).get('nexi_order_ref')
         if raw_ref and raw_ref != self.reference and raw_ref != self.reference + '-m':
             self._set_error('Ritorno Nexi non valido.')
             return
         order_ref = raw_ref or self.reference
-        from urllib.parse import quote
-        if '/orders/hpp' in create_url:
-            verify_url = create_url.replace('/orders/hpp', f'/orders/{quote(order_ref, safe="")}')
-        else:
-            verify_url = create_url.rstrip('/') + f'/orders/{quote(order_ref, safe="")}'
+        verify_url = _nexi_verify_url(provider, order_ref)
         import time as _time
         data = {}
         result = ''

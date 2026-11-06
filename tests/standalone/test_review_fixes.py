@@ -197,6 +197,10 @@ class NexiHostsTest(unittest.TestCase):
     def test_other_host_is_refused(self):
         self.assertFalse(PROVIDER.is_nexi_url('https://example.com/orders/hpp'))
 
+    def test_retired_nexi_it_host_is_refused(self):
+        """#9 H-A2: xpay.nexi.it non risolve più, il server lo rifiuta come il JS."""
+        self.assertFalse(PROVIDER.is_nexi_url('https://xpay.nexi.it/orders/hpp'))
+
     def test_empty_is_refused(self):
         self.assertFalse(PROVIDER.is_nexi_url(''))
         self.assertFalse(PROVIDER.is_nexi_url(None))

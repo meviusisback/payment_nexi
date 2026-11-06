@@ -13,7 +13,8 @@ _logger = logging.getLogger(__name__)
 
 # Domini Nexi ammessi. Solo questi, resto rifiutato.
 # xpay.nexigroup.com = produzione, xpaysandbox.nexigroup.com = test.
-NEXI_HOSTS = ('xpay.nexigroup.com', 'xpaysandbox.nexigroup.com', 'xpay.nexi.it')
+# (xpay.nexi.it non risolve più: tolto, il JS non l'ha mai accettato.)
+NEXI_HOSTS = ('xpay.nexigroup.com', 'xpaysandbox.nexigroup.com')
 
 # Importo di prova per "Verifica metodi". Alcuni servizi hanno minimi propri:
 # PayPal Paga in 3 sotto i 30 € viene rifiutato da Nexi (PS0064/GW0043), quindi

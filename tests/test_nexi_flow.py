@@ -475,9 +475,18 @@ class TestNexiReview(TransactionCase):
 
     def test_reconcile_retries_post_processing(self):
         """#8 M3: done non post-elaborata -> il cron ritenta _post_process."""
+        from datetime import timedelta
+        from odoo import fields as _fields
         tx = self._new_tx()
         tx._set_done()
         tx.write({'is_post_processed': False})
+        # #9 M-A3: il secondo passaggio ha lo stesso cutoff del primo.
+        old = _fields.Datetime.now() - timedelta(minutes=30)
+        self.env.cr.execute(
+            'UPDATE payment_transaction SET create_date = %s WHERE id = %s',
+            (old, tx.id),
+        )
+        tx.invalidate_recordset()
         Tx = self.env['payment.transaction']
         with patch.object(type(Tx), '_post_process') as post:
             found = Tx._nexi_reconcile_pending()
@@ -521,3 +530,126 @@ class TestNexiReview(TransactionCase):
                     'should_tokenize': False,
                     'base_url': 'https://shop.example.com',
                 })
+
+    def test_hpp_embedded_token_is_replaced(self):
+        """#9 M-A1: securityToken dentro hostedPage non vince su quello vero."""
+        tx = self._new_tx()
+        answer = {
+            'hostedPage': 'https://xpay.nexigroup.com/pay?securityToken=EVIL',
+            'securityToken': 'real-token',
+        }
+        with patch.object(
+            type(self.provider), '_nexi_make_request', return_value=answer
+        ):
+            res = tx._get_specific_rendering_values({
+                'amount': 10.0, 'currency_id': tx.currency_id.id,
+                'partner_id': self.partner.id, 'reference': tx.reference,
+                'should_tokenize': False,
+                'base_url': 'https://shop.example.com',
+            })
+        self.assertEqual(res['url_params']['securityToken'], 'real-token')
+
+    def test_reconcile_rescues_buttons_order(self):
+        """#9 H-A1: ordine carte vuoto + ordine bottoni -m pagato -> done."""
+        from datetime import timedelta
+        from odoo import fields as _fields
+        self.provider.nexi_mode = 'build'
+        tx = self._new_tx()
+        tx._set_pending(state_message='in attesa')
+        old = _fields.Datetime.now() - timedelta(minutes=30)
+        self.env.cr.execute(
+            'UPDATE payment_transaction SET create_date = %s WHERE id = %s',
+            (old, tx.id),
+        )
+        tx.invalidate_recordset()
+        empty = self._nexi_answer(tx.reference, 0)
+        paid = self._nexi_answer(
+            tx.reference + '-m', 1000,
+            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
+        )
+
+        def fake_request(method, url, payload=None, params=None):
+            if url.endswith('/orders/%s-m' % tx.reference):
+                return paid
+            return empty
+
+        Tx = self.env['payment.transaction']
+        with patch.object(type(self.provider), '_nexi_make_request', side_effect=fake_request):
+            with patch.object(type(Tx), '_post_process', return_value=True):
+                Tx._nexi_reconcile_pending()
+        tx.invalidate_recordset()
+        self.assertEqual(tx.state, 'done')
+
+    def test_reconcile_probe_never_condemns(self):
+        """#9 H-A1: ordine -m assente -> la pending resta pending, mai error."""
+        from datetime import timedelta
+        from odoo import fields as _fields
+        from odoo.addons.payment_nexi.models.payment_provider import NexiApiError
+        self.provider.nexi_mode = 'build'
+        tx = self._new_tx()
+        tx._set_pending(state_message='in attesa')
+        old = _fields.Datetime.now() - timedelta(minutes=30)
+        self.env.cr.execute(
+            'UPDATE payment_transaction SET create_date = %s WHERE id = %s',
+            (old, tx.id),
+        )
+        tx.invalidate_recordset()
+        empty = self._nexi_answer(tx.reference, 0)
+
+        def fake_request(method, url, payload=None, params=None):
+            if url.endswith('-m'):
+                raise NexiApiError('Nexi: non trovato', status_code=404)
+            return empty
+
+        Tx = self.env['payment.transaction']
+        with patch.object(type(self.provider), '_nexi_make_request', side_effect=fake_request):
+            Tx._nexi_reconcile_pending()
+        tx.invalidate_recordset()
+        self.assertEqual(tx.state, 'pending')
+
+    def test_reconcile_leftover_skips_fresh(self):
+        """#9 M-A3: chiusa-non-processata fresca -> il cron non la tocca."""
+        tx = self._new_tx()
+        tx._set_done()
+        tx.write({'is_post_processed': False})
+        Tx = self.env['payment.transaction']
+        with patch.object(type(Tx), '_post_process') as post:
+            Tx._nexi_reconcile_pending()
+        self.assertFalse(post.called, 'troppo fresca: come il primo giro')
+        self.assertEqual(tx.nexi_reconcile_count, 0)
+
+    def test_reconcile_leftover_alerts_at_exhaustion(self):
+        """#9 M-A3: al 72esimo giro fallito -> errore nei log, una volta."""
+        from datetime import timedelta
+        from odoo import fields as _fields
+        tx = self._new_tx()
+        tx._set_done()
+        tx.write({'is_post_processed': False})
+        old = _fields.Datetime.now() - timedelta(minutes=30)
+        self.env.cr.execute(
+            'UPDATE payment_transaction SET create_date = %s, nexi_reconcile_count = 71 '
+            'WHERE id = %s', (old, tx.id),
+        )
+        tx.invalidate_recordset()
+        Tx = self.env['payment.transaction']
+        with patch.object(type(Tx), '_post_process', side_effect=Exception('boom')):
+            with self.assertLogs('odoo.addons.payment_nexi.models.payment_transaction',
+                                 level='ERROR') as logs:
+                Tx._nexi_reconcile_pending()
+        self.assertEqual(tx.nexi_reconcile_count, 72)
+        self.assertTrue(
+            any('mai post-elaborata' in line for line in logs.output),
+            'il giro che esaurisce i tentativi deve loggare error',
+        )
+
+    def test_agreeing_declines_without_time_cancel(self):
+        """#9 Nota: AUTH + CAPTURE DECLINED senza date -> cancel (concordi)."""
+        tx = self._new_tx()
+        data = self._nexi_answer(
+            tx.reference, 0,
+            ('AUTHORIZATION', 'DECLINED', None),
+            ('CAPTURE', 'DECLINED', None),
+        )
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
+            tx._process_notification_data({})
+        self.assertEqual(tx.state, 'cancel')
