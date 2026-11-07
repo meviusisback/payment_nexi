@@ -231,8 +231,37 @@ class TestNexiReview(TransactionCase):
     def test_nexi_default_methods(self):
         self.assertEqual(
             self.provider._get_default_payment_method_codes(),
-            {'card', 'googlepay', 'applepay', 'bancomatpay', 'mybank', 'paypal', 'paypal_bnpl'},
+            {'card', 'googlepay', 'applepay', 'bancomatpay', 'mybank', 'paypal',
+             'paypal_bnpl', 'visa', 'mastercard', 'amex'},
         )
+
+    def test_card_brand_icons_are_active_and_linked(self):
+        """I brand core devono essere accesi, altrimenti la riga Carta perde le icone."""
+        Method = self.env['payment.method'].with_context(active_test=False)
+        brands = Method.search([('code', 'in', ('visa', 'mastercard', 'amex'))])
+        self.assertEqual(len(brands), 3)
+        self.provider.write({
+            'payment_method_ids': [(4, method.id) for method in brands],
+        })
+        self.provider._activate_default_pms()
+        brands.invalidate_recordset()
+        self.provider.invalidate_recordset()
+        self.assertTrue(all(b.active for b in brands))
+        self.assertTrue(all(b in self.provider.payment_method_ids for b in brands))
+        self.assertEqual(
+            set(self.method_card.brand_ids[:3].mapped('code')),
+            {'visa', 'mastercard', 'amex'},
+            'la riga Carta deve mostrare i tre marchi per primi',
+        )
+        # Le icone sono file del modulo, non dipendono dal filestore del test.
+        import os
+        from odoo.modules import get_module_path
+        base = os.path.join(get_module_path('payment_nexi'), 'static', 'src', 'img')
+        for code in ('visa', 'mastercard', 'amex'):
+            self.assertTrue(
+                os.path.isfile(os.path.join(base, code + '.png')),
+                'manca l\'icona %s' % code,
+            )
 
     def test_method_follows_the_terminal_the_row_will_use(self):
         """La riga usa il PRIMO provider compatibile: se quello rifiuta il
@@ -397,11 +426,33 @@ class TestNexiReview(TransactionCase):
         migrate_mod.migrate(self.env.cr, '1.4.0')
         self.assertEqual(tx.payment_method_id, core)
 
-    def _migration_script(self):
+    def _migration_script(self, version='1.4.0'):
         import os
         from odoo.modules import get_module_path
         return os.path.join(
-            get_module_path('payment_nexi'), 'migrations', '1.4.0', 'post-migrate.py')
+            get_module_path('payment_nexi'), 'migrations', version, 'post-migrate.py')
+
+    def test_migration_restores_brand_icons_and_links(self):
+        """#10 regressione: la 1.4.4 riaccende e riaggancia i brand core."""
+        Method = self.env['payment.method'].with_context(active_test=False)
+        brands = Method.search([('code', 'in', ('visa', 'mastercard', 'amex'))])
+        self.provider.write({
+            'payment_method_ids': [(3, method.id) for method in brands],
+        })
+        brands.write({'active': False})
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            'nexi_migrate_144', self._migration_script('1.4.4'),
+        )
+        migrate_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(migrate_mod)
+        migrate_mod.migrate(self.env.cr, '1.4.4')
+        brands.invalidate_recordset()
+        self.provider.invalidate_recordset()
+        self.assertTrue(all(b.active for b in brands))
+        self.assertTrue(all(b in self.provider.payment_method_ids for b in brands))
+        # Seconda esecuzione: a vuoto, senza errori.
+        migrate_mod.migrate(self.env.cr, '1.4.4')
 
     def test_disagreeing_operations_without_time_stay_pending(self):
         """#8 H1: AUTH pagata + CAPTURE KO senza date -> pending, mai done."""

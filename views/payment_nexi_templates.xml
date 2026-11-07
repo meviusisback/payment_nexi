@@ -603,16 +603,19 @@
                 var b = document.getElementById('nexi-inline');
                 return b ? b.closest('li[name=o_payment_option]') : null;
               }
-              function nexiRowSelected() {
+              // In embedded il "Pay now" del riepilogo è un secondo bottone
+              // inutile (si paga dal pannello Nexi). Lo nascondo anche prima
+              // della scelta: altrimenti compare subito grigio. Con un altro
+              // provider selezionato deve invece restare visibile.
+              function syncSubmit() {
                 var sel = document.querySelector('input[name="o_payment_radio"]:checked');
-                if (!sel) return false;
+                if (!sel) { showSubmit(false); return; }
                 var row = sel.closest('li[name=o_payment_option]');
-                return !!(row &amp;&amp; (row.querySelector('#nexi-inline') || row.querySelector('.nexi-apm-row')));
+                var isNexi = !!(row &amp;&amp; (
+                  row.querySelector('#nexi-inline') || row.querySelector('.nexi-apm-row')
+                ));
+                showSubmit(!isNexi);
               }
-              // Il "Pay now" fuori dal form serve a tutti: lo nascondo solo
-              // quando il cliente ha scelto una riga Nexi (dove si paga dal
-              // pannello). Con un altro provider deve restare visibile.
-              function syncSubmit() { showSubmit(!nexiRowSelected()); }
               document.addEventListener('change', function (ev) {
                 if (ev.target &amp;&amp; ev.target.name === 'o_payment_radio') syncSubmit();
               }, true);

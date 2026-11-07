@@ -34,8 +34,14 @@ def post_init_hook(env):
         missing = [m.id for m in methods if m.id not in have]
         if missing:
             existing.write({'payment_method_ids': [(4, i) for i in missing]})
+    if existing.state != 'disabled':
+        # Provider già attivo: accende i brand e mette per primi i loro loghi.
+        existing._activate_default_pms()
     base = os.path.join(os.path.dirname(__file__), 'static', 'src', 'img')
-    for code in ('googlepay', 'applepay', 'bancomatpay', 'paypal_bnpl'):
+    # Anche i brand core (visa/mastercard/amex): il file è lo stesso di Odoo,
+    # ma su DB vecchi l'immagine può essere vuota e senza di essa la riga
+    # Carta perde le icone dei circuiti.
+    for code in codes:
         path = os.path.join(base, code + '.png')
         if not os.path.isfile(path):
             continue

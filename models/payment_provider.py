@@ -417,7 +417,26 @@ class PaymentProviderNexi(models.Model):
         self.ensure_one()
         if self.code != 'nexi':
             return super()._get_default_payment_method_codes()
-        return {'card', 'googlepay', 'applepay', 'bancomatpay', 'mybank', 'paypal', 'paypal_bnpl'}
+        # I brand core (Visa/Mastercard/Amex) non sono metodi primari: senza
+        # questi codici _activate_default_pms li lascia spenti e la riga Carta
+        # non mostra più le loro icone.
+        return {
+            'card', 'googlepay', 'applepay', 'bancomatpay', 'mybank', 'paypal',
+            'paypal_bnpl', 'visa', 'mastercard', 'amex',
+        }
+
+    def _activate_default_pms(self):
+        result = super()._activate_default_pms()
+        if not self.filtered(lambda p: p.code == 'nexi'):
+            return result
+        # La riga Carta mostra i primi 4 brand attivi per sequence/name: i
+        # brand core hanno sequence 1000 e finirebbero dopo altri circuiti.
+        brands = self.env['payment.method'].with_context(active_test=False).search([
+            ('code', 'in', ('visa', 'mastercard', 'amex')),
+        ])
+        if brands and any(m.sequence != 1 for m in brands):
+            brands.write({'sequence': 1})
+        return result
 
     def _compute_feature_support_fields(self):
         super()._compute_feature_support_fields()

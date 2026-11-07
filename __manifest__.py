@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 {
     'name': 'Nexi XPay Web',
-    'version': '1.4.3',
+    'version': '1.4.4',
     'category': 'Accounting/Payment Providers',
     'summary': 'Pagamenti Nexi XPay Web: Hosted Page o campi carta in cassa.',
     'description': """
