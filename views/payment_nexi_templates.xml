@@ -477,6 +477,9 @@
               li[name=o_payment_option]:has(.nexi-apm-row){
                 cursor:pointer;align-items:flex-start !important;
                 border:1px solid transparent !important;box-sizing:border-box;
+                /* Odoo usa py-3: tra una pillola e l'altra restano ~32px.
+                   Qui il respiro è 4px sopra + 4px sotto. */
+                padding:4px 0 !important;margin:0 !important;
               }
               li[name=o_payment_option]:has(#nexi-inline) input[type="radio"],
               li[name=o_payment_option]:has(.nexi-apm-row) input[type="radio"]{display:none !important}
@@ -512,12 +515,12 @@
               li[name=o_payment_option]:has(.nexi-apm-row) div.position-relative{display:none !important}
               li[name=o_payment_option]:has(#nexi-inline) span.rounded.overflow-hidden,
               li[name=o_payment_option]:has(.nexi-apm-row) span.rounded.overflow-hidden{
-                width:auto !important;height:18px !important;min-width:0;background:transparent !important;
+                width:auto !important;height:24px !important;min-width:0;background:transparent !important;
                 box-shadow:none !important;overflow:visible !important;border-radius:3px;
               }
               li[name=o_payment_option]:has(#nexi-inline) span.rounded.overflow-hidden img,
               li[name=o_payment_option]:has(.nexi-apm-row) span.rounded.overflow-hidden img{
-                height:18px !important;width:auto !important;max-width:36px;object-fit:contain;
+                height:24px !important;width:auto !important;max-width:52px;object-fit:contain;
                 min-height:0 !important;display:block;
               }
               /* --- pannello carta: stile pulito, accento blu --- */
