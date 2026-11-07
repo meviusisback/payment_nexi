@@ -516,12 +516,12 @@
               li[name=o_payment_option]:has(#nexi-inline) span.rounded.overflow-hidden,
               li[name=o_payment_option]:has(.nexi-apm-row) span.rounded.overflow-hidden{
                 width:auto !important;height:24px !important;min-width:0;background:transparent !important;
-                box-shadow:none !important;overflow:visible !important;border-radius:3px;
+                box-shadow:none !important;overflow:hidden !important;border-radius:6px;
               }
               li[name=o_payment_option]:has(#nexi-inline) span.rounded.overflow-hidden img,
               li[name=o_payment_option]:has(.nexi-apm-row) span.rounded.overflow-hidden img{
                 height:24px !important;width:auto !important;max-width:52px;object-fit:contain;
-                min-height:0 !important;display:block;
+                min-height:0 !important;display:block;border-radius:6px;
               }
               /* --- pannello carta: stile pulito, accento blu --- */
               #nexi-inline{
