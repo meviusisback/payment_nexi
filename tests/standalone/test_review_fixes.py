@@ -15,6 +15,7 @@ import pathlib
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from unittest.mock import patch
 
@@ -808,6 +809,37 @@ class RequestGuardTest(unittest.TestCase):
         response = self._Resp()
         response.headers = {'Content-Length': str(PROVIDER.NEXI_MAX_BODY + 1)}
         with patch.object(PROVIDER.requests, 'request', return_value=response):
+            with self.assertRaises(PROVIDER.NexiUnavailable):
+                self._Provider()._nexi_make_request(
+                    'GET', 'https://xpay.nexigroup.com/orders/x')
+
+
+class TotalDeadlineTest(unittest.TestCase):
+    """#15 M3: un gateway che sgocciola non tiene il worker oltre il budget."""
+
+    class _Provider(PROVIDER.PaymentProviderNexi):
+        nexi_api_key = 'chiave'
+
+        def ensure_one(self):
+            return self
+
+    def test_hung_request_is_abandoned(self):
+        def hang(*args, **kwargs):
+            time.sleep(1.5)
+
+        with patch.object(PROVIDER.requests, 'request', side_effect=hang), \
+                patch.object(PROVIDER, 'NEXI_TOTAL_TIMEOUT', 0.2):
+            started = time.monotonic()
+            with self.assertRaises(PROVIDER.NexiUnavailable):
+                self._Provider()._nexi_make_request(
+                    'GET', 'https://xpay.nexigroup.com/orders/x')
+            self.assertLess(time.monotonic() - started, 1.0)
+
+    def test_errors_cross_the_guard(self):
+        def boom(*args, **kwargs):
+            raise PROVIDER.NexiUnavailable('giù')
+
+        with patch.object(PROVIDER.requests, 'request', side_effect=boom):
             with self.assertRaises(PROVIDER.NexiUnavailable):
                 self._Provider()._nexi_make_request(
                     'GET', 'https://xpay.nexigroup.com/orders/x')
