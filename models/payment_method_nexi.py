@@ -34,15 +34,13 @@ class PaymentMethodNexi(models.Model):
             force_tokenization=force_tokenization,
             is_express_checkout=is_express_checkout, report=report, **kwargs
         )
-        nexi_ids = set(self.env['payment.provider'].browse(provider_ids).filtered(
-            lambda p: p.code == 'nexi'
-        ).ids)
-        if not nexi_ids or not methods:
-            return methods
         # Provider compatibili con QUESTA cassa: solo questi contano. Un metodo
         # offerto da un provider lontano non deve tenerlo in vita (né il
         # contrario: un altro provider compatibile lo tiene visibile).
-        compatible_ids = set(provider_ids)
+        compatible = self.env['payment.provider'].browse(provider_ids)
+        nexi_ids = set(compatible.filtered(lambda p: p.code == 'nexi').ids)
+        if not nexi_ids or not methods:
+            return methods
         # Chi ha rifiutato il metodo, terminale per terminale.
         refused = {}
         for rec in self.env['payment.nexi.method.availability'].sudo().search([
@@ -57,11 +55,13 @@ class PaymentMethodNexi(models.Model):
 
             In `payment.method_form` la riga prende
             `pm_sudo.provider_ids.filtered(lambda p: p in providers_sudo)[:1]`,
-            cioè il primo provider compatibile collegato al metodo (ordine per
-            id). Devo decidere su quello, non su "qualcuno lo accetta".
+            cioè il primo provider compatibile collegato al metodo. Il
+            recordset `provider_ids` è ordinato da `payment.provider._order`
+            (module_state, state desc, sequence, name), non per id: devo
+            replicare QUESTO ordine, non scegliere l'id minimo.
             """
-            candidates = [p.id for p in method.provider_ids if p.id in compatible_ids]
-            return min(candidates) if candidates else None
+            row = method.provider_ids.filtered(lambda p: p in compatible)[:1]
+            return row.id if row else None
 
         def _keep(method):
             row_provider = _row_provider_id(method)

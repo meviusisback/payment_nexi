@@ -323,6 +323,13 @@ class PaymentTransactionNexi(models.Model):
     nexi_build_token = fields.Char(
         string='Token Build', readonly=True, groups='base.group_system',
         copy=False)
+    # True appena l'ordine è stato creato su Nexi. Serve al cron: una draft
+    # senza questo flag è un carrello mai arrivato al gateway, e non va sondata.
+    nexi_order_started = fields.Boolean(
+        string='Ordine Nexi avviato', readonly=True, default=False, copy=False,
+        help='True quando l\'ordine è stato creato su Nexi. Da lì il cron può '
+             'riconciliare anche una transazione rimasta draft.',
+    )
     # Codice casuale per transazione: chi non ce l'ha non tocca il pagamento.
     nexi_access_token = fields.Char(
         string='Codice accesso Nexi', readonly=True, groups='base.group_system',
@@ -477,7 +484,8 @@ class PaymentTransactionNexi(models.Model):
             if not self.env.su and not self.env.user.has_group('base.group_system'):
                 # Il cliente non sceglie token ne' contratti: li fa solo il sistema.
                 for f in ('nexi_contract_id', 'nexi_build_session', 'nexi_build_token',
-                          'nexi_masked_pan', 'nexi_order_id', 'nexi_access_token',
+                          'nexi_order_started', 'nexi_masked_pan', 'nexi_order_id',
+                          'nexi_access_token',
                           'nexi_reconcile_count', 'nexi_uncertain',
                           'nexi_reverify_count', 'nexi_last_result',
                           'nexi_last_captured'):
@@ -490,7 +498,8 @@ class PaymentTransactionNexi(models.Model):
     def write(self, vals):
         if not self.env.su and not self.env.user.has_group('base.group_system'):
             bad = [f for f in ('nexi_contract_id', 'nexi_build_session', 'nexi_build_token',
-                               'nexi_masked_pan', 'nexi_order_id', 'nexi_access_token',
+                               'nexi_order_started', 'nexi_masked_pan', 'nexi_order_id',
+                               'nexi_access_token',
                                'nexi_reconcile_count', 'nexi_uncertain',
                                'nexi_reverify_count', 'nexi_last_result',
                                'nexi_last_captured')
@@ -505,10 +514,17 @@ class PaymentTransactionNexi(models.Model):
             vals['nexi_order_id'] = values.get('reference')
         return vals
 
+    def _nexi_mark_order_started(self):
+        """L'ordine esiste su Nexi: da qui il cron può riconciliare la draft."""
+        if not self.nexi_order_started:
+            self.sudo().write({'nexi_order_started': True})
+
     def _nexi_post_order(self, provider, url, payload, want_save=False):
         """Crea ordine su Nexi. Se il contratto è morto, lo dimentica e riprova."""
         try:
-            return provider._nexi_make_request('POST', url, payload=payload)
+            data = provider._nexi_make_request('POST', url, payload=payload)
+            self._nexi_mark_order_started()
+            return data
         except ValidationError as e:
             session = (payload or {}).get('paymentSession') or {}
             rec = session.get('recurrence') or {}
@@ -534,7 +550,9 @@ class PaymentTransactionNexi(models.Model):
                 self.nexi_contract_id = contract
             payload = dict(payload, paymentSession=session)
             try:
-                return provider._nexi_make_request('POST', url, payload=payload)
+                data = provider._nexi_make_request('POST', url, payload=payload)
+                self._nexi_mark_order_started()
+                return data
             except ValidationError as e2:
                 # Il dettaglio di Nexi resta nei log: in state_message va solo
                 # un messaggio generico (lo legge anche il cliente).
@@ -807,6 +825,7 @@ class PaymentTransactionNexi(models.Model):
             # finalize è una rotta JSON: il tok va nell'header, non in query.
             build_finalize_url=f'/payment/nexi/build/{self.reference}/finalize',
             build_tok=tok,
+            build_page_url=f'/payment/nexi/build/{self.reference}',
             csrf_token=csrf,
             confirm_url=f'/payment/nexi/confirm?ref={self.reference}&tok={tok}',
             redirect_url=f'/payment/nexi/build/{self.reference}?tok={tok}',
@@ -863,19 +882,28 @@ class PaymentTransactionNexi(models.Model):
         from datetime import timedelta
         from odoo import fields as _fields
         cutoff = _fields.Datetime.now() - timedelta(minutes=10)
+        # Una pending ha già un ordine su Nexi (ci si arriva da una notifica).
+        # Una draft può essere un carrello mai partito: conta solo se l'ordine
+        # è stato creato sul gateway. `is_post_processed` NON prova un esito
+        # definitivo: il flusso sale lo mette a True anche su un PENDING, e
+        # quella transazione va ancora riconciliata.
         stuck = self.search([
             ('provider_code', '=', 'nexi'),
-            ('state', '=', 'pending'),
-            ('is_post_processed', '=', False),
+            ('state', 'in', ['draft', 'pending']),
             ('create_date', '<', cutoff),
             ('nexi_reconcile_count', '<', 72),
+            '|',
+            ('state', '=', 'pending'),
+            ('nexi_order_started', '=', True),
         ], order='nexi_reconcile_count, create_date', limit=limit)
         for tx in stuck:
             if not _nexi_lock_row(self.env.cr, tx.id):
                 _logger.info('Nexi %s: chiusura già in corso in un altro flusso.', tx.reference)
                 continue
             tx.invalidate_recordset()
-            if tx.state != 'pending' or tx.is_post_processed:
+            if tx.state not in ('draft', 'pending'):
+                continue
+            if tx.state == 'draft' and not tx.nexi_order_started:
                 continue
             try:
                 with self.env.cr.savepoint():
@@ -904,7 +932,7 @@ class PaymentTransactionNexi(models.Model):
                 # la transazione esce dal giro e resta pending da gestire a mano.
                 count = (tx.nexi_reconcile_count or 0) + 1
                 tx.sudo().write({'nexi_reconcile_count': count})
-                if count >= 72 and tx.state == 'pending':
+                if count >= 72 and tx.state in ('draft', 'pending'):
                     # Stesso alert del leftover: una pending che esce dal giro
                     # con soldi trattenuti non deve sparire in silenzio.
                     _logger.error(

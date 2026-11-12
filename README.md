@@ -5,7 +5,7 @@
 **Odoo 18 payment provider for Nexi XPay Web (REST API with `X-Api-Key`): Hosted Page redirect or embedded card fields at checkout. Odoo never sees the card number.**
 
 [![License: LGPL-3](https://img.shields.io/github/license/meviusisback/payment_nexi)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.4.6-blue)
+![Version](https://img.shields.io/badge/version-1.4.7-blue)
 ![Linux](https://img.shields.io/badge/linux-supported-1793d1)
 
 ![Nexi XPay Web checkout: payment methods with brand logos](static/description/checkout.png)
@@ -21,7 +21,7 @@ Selling online with Odoo on an Italian Nexi terminal means choosing between send
 - **Two checkout modes**: **Hosted Page** (redirect to the Nexi page) and **Embedded Build v3** (card fields inside the Odoo checkout, rendered as Nexi iframes).
 - **Server-side verification only**: the outcome is always re-checked with `GET /orders/{reference}` — the browser return is never trusted.
 - **Strict close-out**: the transaction becomes `done` only with an `EXECUTED` outcome, a matching currency (required, never skipped) and a captured amount **equal** to the expected one (compared in cents). A higher capture (e.g. a stale session paid twice) becomes `error` with captured-vs-expected in the log, for a manual refund from the Nexi back office. The captured amount is read from the order total first, then from the operation, then from the sum of same-currency captures — decimal formats (euro) are converted, never rejected. Without reliable dates, agreeing operations decide: both `EXECUTED` closes `done` after the amount/currency checks, both unpaid cancels; disagreeing operations stay `pending`.
-- **Reconciliation cron**: every 10 minutes the pending transactions older than 10 minutes are re-checked on Nexi with the same code as the confirmation route — a payment whose browser return and notification were both lost still closes by itself. Recent *uncertain* errors (4xx, orderId mismatch, missing currency, partial capture) are re-checked too, with a separate counter. Pending gives up after 72 attempts, uncertain errors after 12; at the cap an `ERROR` log names the reference and the last known captured/expected amount. Transient gateway errors stay `pending`; the HTTP path makes a single call.
+- **Reconciliation cron**: every 10 minutes the transactions older than 10 minutes without a final outcome are re-checked on Nexi with the same code as the confirmation route — `pending`, or `draft` whose Nexi order was actually created (`nexi_order_started`) — so a payment whose browser return and notification were both lost still closes by itself. `is_post_processed` is not treated as proof of a final gateway outcome. Recent *uncertain* errors (4xx, orderId mismatch, missing currency, partial capture) are re-checked too, with a separate counter. Pending gives up after 72 attempts, uncertain errors after 12; at the cap an `ERROR` log names the reference and the last known captured/expected amount. Transient gateway errors stay `pending`; the HTTP path makes a single call.
 - **Explicit outcome mapping**: `AUTHORIZED` stays authorized-but-not-captured; `CANCELED`, `THREEDS_FAILED`, `DENIED`, `DENIED_BY_RISK`, `ERROR`, `DECLINED`, `FAILED`, `VOIDED` and `REFUNDED` cancel the transaction; `THREEDS_VALIDATED` (3DS passed, payment still running) waits briefly like `PENDING`.
 - **Seven payment methods** with per-terminal availability:
 
@@ -99,7 +99,7 @@ Every transaction carries a random code (`tok`): without the right code the publ
 ```
 payment_nexi/
 ├── __init__.py                     # installation hook
-├── __manifest__.py                 # version 1.4.6, depends, data files
+├── __manifest__.py                 # version 1.4.7, depends, data files
 ├── controllers/main.py             # Nexi return + Build routes
 ├── data/payment_method_data.xml    # payment methods (Nexi-only codes; shared ones come from the core)
 ├── models/
@@ -133,7 +133,7 @@ python3 -m unittest discover -s tests/standalone -t .
 odoo -d nexi_test -i payment_nexi --test-enable --test-tags /payment_nexi --stop-after-init
 ```
 
-The Odoo suite covers the outcome with `AUTHORIZATION` + `CAPTURE`, the pending authorization, the amount mismatch, the decimal and summed amounts, the reconciliation cron, the transient-error and currency rules, the per-terminal method visibility and the currency/method defaults.
+The Odoo suite covers the outcome with `AUTHORIZATION` + `CAPTURE`, the pending authorization, the amount mismatch, the decimal and summed amounts, the reconciliation cron (including a `draft` with a started order and a `pending` already post-processed), the transient-error and currency rules, the per-terminal method visibility, the provider row order, the Build redirect form, the install hook with inactive core methods and the currency/method defaults.
 
 ## License
 

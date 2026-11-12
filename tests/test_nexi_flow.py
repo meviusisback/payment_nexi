@@ -944,3 +944,176 @@ class TestNexiReview(TransactionCase):
                 routing = getattr(NexiController, name).original_routing
                 self.assertIs(routing.get('csrf'), True)
         self.assertIs(NexiController.nexi_confirm.original_routing.get('csrf'), False)
+
+    # --- #11: installazione, riconciliazione, redirect Build, ordine provider,
+    # --- scelta carta salvata.
+
+    def test_post_init_links_inactive_core_methods(self):
+        """#11 P1: su DB pulito i metodi core sono inattivi; l'hook deve linkarli."""
+        from odoo.addons.payment_nexi import post_init_hook
+        Method = self.env['payment.method'].with_context(active_test=False)
+        paypal = Method.search([('code', '=', 'paypal')], limit=1)
+        mybank = Method.search([('code', '=', 'mybank')], limit=1)
+        self.assertTrue(paypal and mybank, 'i metodi core devono esistere')
+        # Provider spento: l'hook non deve passare da _activate_default_pms.
+        self.provider.write({
+            'state': 'disabled',
+            'payment_method_ids': [(3, paypal.id), (3, mybank.id)],
+        })
+        (paypal | mybank).write({'active': False})
+        post_init_hook(self.env)
+        self.provider.invalidate_recordset()
+        linked = self.provider.with_context(active_test=False).payment_method_ids
+        self.assertIn(paypal.id, linked.ids, 'paypal inattivo deve essere collegato')
+        self.assertIn(mybank.id, linked.ids, 'mybank inattivo deve essere collegato')
+
+    def test_reconcile_draft_with_order_started(self):
+        """#11 P1: ritorno e webhook persi -> la draft con ordine va riconciliata."""
+        from datetime import timedelta
+        from odoo import fields as _fields
+        tx = self._new_tx()
+        self.assertEqual(tx.state, 'draft')
+        tx.sudo().write({'nexi_order_started': True})
+        old = _fields.Datetime.now() - timedelta(minutes=30)
+        self.env.cr.execute(
+            'UPDATE payment_transaction SET create_date = %s WHERE id = %s',
+            (old, tx.id),
+        )
+        tx.invalidate_recordset()
+        data = self._nexi_answer(
+            tx.reference, 1000,
+            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
+        )
+        Tx = self.env['payment.transaction']
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
+            with patch.object(type(Tx), '_post_process', return_value=True):
+                found = Tx._nexi_reconcile_pending()
+        tx.invalidate_recordset()
+        self.assertEqual(found, 1)
+        self.assertEqual(tx.state, 'done')
+        self.assertEqual(tx.nexi_reconcile_count, 1)
+
+    def test_reconcile_skips_draft_never_sent_to_gateway(self):
+        """#11 P1: una draft senza ordine su Nexi non va sondata."""
+        from datetime import timedelta
+        from odoo import fields as _fields
+        tx = self._new_tx()
+        old = _fields.Datetime.now() - timedelta(minutes=30)
+        self.env.cr.execute(
+            'UPDATE payment_transaction SET create_date = %s WHERE id = %s',
+            (old, tx.id),
+        )
+        tx.invalidate_recordset()
+        Tx = self.env['payment.transaction']
+        with patch.object(type(self.provider), '_nexi_make_request') as req:
+            found = Tx._nexi_reconcile_pending()
+        self.assertEqual(found, 0)
+        self.assertFalse(req.called, 'carrello mai partito: Nexi non si chiama')
+        self.assertEqual(tx.nexi_reconcile_count, 0)
+
+    def test_reconcile_pending_already_post_processed(self):
+        """#11 P1: is_post_processed non prova l'esito definitivo."""
+        from datetime import timedelta
+        from odoo import fields as _fields
+        tx = self._new_tx()
+        tx._set_pending(state_message='in attesa')
+        tx.write({'is_post_processed': True})
+        old = _fields.Datetime.now() - timedelta(minutes=30)
+        self.env.cr.execute(
+            'UPDATE payment_transaction SET create_date = %s WHERE id = %s',
+            (old, tx.id),
+        )
+        tx.invalidate_recordset()
+        data = self._nexi_answer(
+            tx.reference, 1000,
+            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
+        )
+        Tx = self.env['payment.transaction']
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
+            with patch.object(type(Tx), '_post_process', return_value=True):
+                found = Tx._nexi_reconcile_pending()
+        tx.invalidate_recordset()
+        self.assertEqual(found, 1)
+        self.assertEqual(tx.state, 'done')
+
+    def test_order_creation_marks_started(self):
+        """#11 P1: l'ordine creato su Nexi lascia il segnale per il cron."""
+        tx = self._new_tx()
+        answer = {
+            'hostedPage': 'https://xpay.nexigroup.com/pay?x=1',
+            'securityToken': 't',
+        }
+        with patch.object(
+            type(self.provider), '_nexi_make_request', return_value=answer
+        ):
+            tx._get_specific_rendering_values({
+                'amount': 10.0, 'currency_id': tx.currency_id.id,
+                'partner_id': self.partner.id, 'reference': tx.reference,
+                'should_tokenize': False, 'base_url': 'https://shop.example.com',
+            })
+        tx.invalidate_recordset()
+        self.assertTrue(tx.nexi_order_started)
+
+    def test_build_redirect_renders_a_submittable_form(self):
+        """#11 P2: _processRedirectFlow cerca un <form>: la Build deve averlo."""
+        from lxml import html as lxml_html
+        self.provider.nexi_mode = 'build'
+        tx = self._new_tx()
+        build_answer = {
+            'sessionId': 'S1', 'securityToken': 'T1', 'fields': [],
+            'url': 'https://xpay.nexigroup.com/build', 'state': 'PAYMENT_STARTED',
+        }
+        with patch.object(
+            type(tx), '_nexi_post_order', return_value=build_answer
+        ):
+            values = tx._get_specific_rendering_values({
+                'amount': 10.0, 'currency_id': tx.currency_id.id,
+                'partner_id': self.partner.id, 'reference': tx.reference,
+                'should_tokenize': False, 'base_url': 'https://shop.example.com',
+            })
+        form_html = self.env['ir.qweb']._render(
+            self.env.ref('payment_nexi.redirect_build').id, values)
+        doc = lxml_html.fromstring(form_html)
+        form = doc if doc.tag == 'form' else doc.find('.//form')
+        self.assertIsNotNone(form, 'il redirect Build deve contenere un form')
+        self.assertEqual(form.get('method').upper(), 'GET')
+        self.assertEqual(
+            form.get('action'), '/payment/nexi/build/%s' % tx.reference)
+        tok = form.find('.//input[@name="tok"]')
+        self.assertIsNotNone(tok)
+        self.assertEqual(tok.get('value'), tx.nexi_access_token)
+
+    def test_method_row_uses_template_provider_order(self):
+        """#11 P2: la riga segue _order dei provider, non l'id minimo."""
+        first = self.provider                        # id più basso
+        second = first.copy({
+            'name': 'Nexi secondo', 'state': 'test', 'sequence': 1,
+        })
+        first.write({'sequence': 50})
+        Method = self.env['payment.method']
+        row = self.method_card.provider_ids.filtered(
+            lambda p: p in (first | second))[:1]
+        self.assertEqual(row, second, 'la riga deve usare sequence, non l\'id')
+        Availability = self.env['payment.nexi.method.availability']
+        Availability.create({
+            'provider_id': second.id, 'method_id': self.method_card.id,
+            'disabled': True,
+        })
+        both = Method._get_compatible_payment_methods(
+            [first.id, second.id], self.partner.id)
+        self.assertNotIn(
+            self.method_card, both,
+            'il terminale della riga rifiuta la carta: non deve comparire')
+        Availability.search([
+            ('provider_id', '=', second.id),
+            ('method_id', '=', self.method_card.id),
+        ]).unlink()
+        Availability.create({
+            'provider_id': first.id, 'method_id': self.method_card.id,
+            'disabled': True,
+        })
+        both = Method._get_compatible_payment_methods(
+            [first.id, second.id], self.partner.id)
+        self.assertIn(
+            self.method_card, both,
+            'la riga usa il secondo terminale, che la carta la accetta')
