@@ -8,7 +8,7 @@
 ![Version](https://img.shields.io/badge/version-1.4.6-blue)
 ![Linux](https://img.shields.io/badge/linux-supported-1793d1)
 
-![Module icon](static/description/icon.png)
+![Nexi XPay Web checkout: payment methods with brand logos](static/description/checkout.png)
 
 </div>
 
@@ -108,7 +108,7 @@ payment_nexi/
 │   ├── payment_nexi_method_availability.py  # methods per terminal
 │   └── payment_transaction.py      # order creation, outcome, OneClick
 ├── security/ir.model.access.csv
-├── static/description/             # marketplace card and icon
+├── static/description/             # marketplace card, icon and checkout.png
 ├── tests/                          # Odoo tests + standalone tests
 └── views/payment_nexi_templates.xml
 ```
