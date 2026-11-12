@@ -2,6 +2,7 @@
 """Provider Nexi XPay Web. Solo redirect (Hosted Page). Niente dati carta in Odoo."""
 import logging
 import re
+import threading
 import time
 import uuid
 from urllib.parse import urlparse
@@ -91,6 +92,37 @@ def _nexi_read_limited(resp, max_bytes=NEXI_MAX_BODY, deadline=None, now=time.mo
             raise NexiUnavailable(_('Nexi risposta non valida. Riprova.'))
         chunks.append(chunk)
     return b''.join(chunks)
+
+
+def _nexi_bounded(call, timeout=None):
+    """Esegue `call` entro `timeout` secondi, altrimenti NexiUnavailable.
+
+    `requests` non ha un timeout complessivo: quello per-read non ferma un
+    gateway che manda un byte di header ogni pochi secondi. Il thread che
+    esegue la chiamata è daemon, quindi il worker sync torna libero alla
+    scadenza e un processo che si ferma non lo aspetta. La connessione resta
+    aperta finché il gateway non smette: è il prezzo per non tenere appeso
+    il worker.
+    """
+    timeout = NEXI_TOTAL_TIMEOUT if timeout is None else timeout
+    box = {}
+
+    def runner():
+        try:
+            box['value'] = call()
+        except BaseException as exc:  # rilanciata nel chiamante
+            box['error'] = exc
+
+    worker = threading.Thread(target=runner, name='nexi-http', daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        _logger.warning('Nexi: deadline totale di %ss superato', timeout)
+        raise NexiUnavailable(_('Nexi non raggiungibile. Riprova.'))
+    error = box.get('error')
+    if error is not None:
+        raise error.with_traceback(error.__traceback__)
+    return box.get('value')
 
 
 # Domini Nexi ammessi. Solo questi, resto rifiutato.
@@ -473,56 +505,60 @@ class PaymentProviderNexi(models.Model):
         }
         started = time.monotonic()
         deadline = started + NEXI_TOTAL_TIMEOUT
-        try:
-            # Niente redirect: la chiave non deve mai viaggiare su un altro host.
-            # stream=True + _nexi_read_limited: il timeout di requests è per
-            # singola lettura, non ferma un gateway che manda un byte alla volta.
-            resp = requests.request(
-                method, url, json=payload, params=params, headers=headers,
-                timeout=(5, 10), allow_redirects=False, stream=True,
-            )
-        except requests.exceptions.RequestException:
-            _logger.exception('Nexi non raggiungibile: %s', url)
-            raise NexiUnavailable(_('Nexi non raggiungibile. Riprova.'))
-        # La deadline copre anche connect/header: requests non ha un timeout
-        # totale, quindi una volta arrivati gli header rifiuto una risposta
-        # che ha già sfondato il budget. Un drip che non completa mai gli
-        # header resta limitato dal timeout per-read (10s).
-        if time.monotonic() > deadline:
-            resp.close()
-            _logger.warning('Nexi: risposta oltre il deadline: %s', url)
-            raise NexiUnavailable(_('Nexi non raggiungibile. Riprova.'))
-        try:
-            if 300 <= (resp.status_code or 0) < 400:
-                _logger.warning(
-                    'Nexi redirect inatteso %s -> %s',
-                    url, _nexi_sanitize_text(resp.headers.get('Location'), 300),
-                )
-                raise NexiUnavailable(_('Nexi risposta non valida. Riprova.'))
+
+        def call():
             try:
-                raw = _nexi_read_limited(resp, deadline=deadline)
+                # Niente redirect: la chiave non deve mai viaggiare su un altro host.
+                # stream=True + _nexi_read_limited: il timeout di requests è per
+                # singola lettura, non ferma un gateway che manda un byte alla volta.
+                resp = requests.request(
+                    method, url, json=payload, params=params, headers=headers,
+                    timeout=(5, 10), allow_redirects=False, stream=True,
+                )
             except requests.exceptions.RequestException:
-                _logger.exception('Nexi lettura interrotta: %s', url)
+                _logger.exception('Nexi non raggiungibile: %s', url)
                 raise NexiUnavailable(_('Nexi non raggiungibile. Riprova.'))
-            # Il resto del metodo usa resp.text/resp.json(): tengo il corpo
-            # già letto (e limitato) nel Response.
-            resp._content = raw
-            resp._content_consumed = True
+            # Secondo livello: qui il budget può essere già scaduto, in quel
+            # caso non serve leggere il corpo.
+            if time.monotonic() > deadline:
+                resp.close()
+                _logger.warning('Nexi: risposta oltre il deadline: %s', url)
+                raise NexiUnavailable(_('Nexi non raggiungibile. Riprova.'))
             try:
-                resp.raise_for_status()
-            except requests.exceptions.HTTPError:
-                _logger.error(
-                    'Nexi %s %s -> %s', method, url,
-                    _nexi_sanitize_text(resp.text, 500),
-                )
-                raise NexiApiError(
-                    _('Nexi: %s') % _nexi_error_detail(resp),
-                    status_code=resp.status_code,
-                    gateway_code=_nexi_error_code(resp),
-                )
-            try:
-                return resp.json() if resp.text else {}
-            except (ValueError, RecursionError, OverflowError):
-                raise NexiUnavailable(_('Nexi risposta non valida. Riprova.'))
-        finally:
-            resp.close()
+                if 300 <= (resp.status_code or 0) < 400:
+                    _logger.warning(
+                        'Nexi redirect inatteso %s -> %s',
+                        url, _nexi_sanitize_text(resp.headers.get('Location'), 300),
+                    )
+                    raise NexiUnavailable(_('Nexi risposta non valida. Riprova.'))
+                try:
+                    raw = _nexi_read_limited(resp, deadline=deadline)
+                except requests.exceptions.RequestException:
+                    _logger.exception('Nexi lettura interrotta: %s', url)
+                    raise NexiUnavailable(_('Nexi non raggiungibile. Riprova.'))
+                # Il resto del metodo usa resp.text/resp.json(): tengo il corpo
+                # già letto (e limitato) nel Response.
+                resp._content = raw
+                resp._content_consumed = True
+                try:
+                    resp.raise_for_status()
+                except requests.exceptions.HTTPError:
+                    _logger.error(
+                        'Nexi %s %s -> %s', method, url,
+                        _nexi_sanitize_text(resp.text, 500),
+                    )
+                    raise NexiApiError(
+                        _('Nexi: %s') % _nexi_error_detail(resp),
+                        status_code=resp.status_code,
+                        gateway_code=_nexi_error_code(resp),
+                    )
+                try:
+                    return resp.json() if resp.text else {}
+                except (ValueError, RecursionError, OverflowError):
+                    raise NexiUnavailable(_('Nexi risposta non valida. Riprova.'))
+            finally:
+                resp.close()
+
+        # Deadline unico su connect+TLS+header+corpo: il primo livello è qui,
+        # il timeout per-read sopra resta come secondo livello.
+        return _nexi_bounded(call, NEXI_TOTAL_TIMEOUT)
