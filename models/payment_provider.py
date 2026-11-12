@@ -471,17 +471,26 @@ class PaymentProviderNexi(models.Model):
             'X-Api-Key': self.nexi_api_key or '',
             'Correlation-Id': str(uuid.uuid4()),
         }
-        deadline = time.monotonic() + NEXI_TOTAL_TIMEOUT
+        started = time.monotonic()
+        deadline = started + NEXI_TOTAL_TIMEOUT
         try:
             # Niente redirect: la chiave non deve mai viaggiare su un altro host.
             # stream=True + _nexi_read_limited: il timeout di requests è per
             # singola lettura, non ferma un gateway che manda un byte alla volta.
             resp = requests.request(
                 method, url, json=payload, params=params, headers=headers,
-                timeout=(5, 15), allow_redirects=False, stream=True,
+                timeout=(5, 10), allow_redirects=False, stream=True,
             )
         except requests.exceptions.RequestException:
             _logger.exception('Nexi non raggiungibile: %s', url)
+            raise NexiUnavailable(_('Nexi non raggiungibile. Riprova.'))
+        # La deadline copre anche connect/header: requests non ha un timeout
+        # totale, quindi una volta arrivati gli header rifiuto una risposta
+        # che ha già sfondato il budget. Un drip che non completa mai gli
+        # header resta limitato dal timeout per-read (10s).
+        if time.monotonic() > deadline:
+            resp.close()
+            _logger.warning('Nexi: risposta oltre il deadline: %s', url)
             raise NexiUnavailable(_('Nexi non raggiungibile. Riprova.'))
         try:
             if 300 <= (resp.status_code or 0) < 400:

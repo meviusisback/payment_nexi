@@ -898,15 +898,10 @@
                   toast('Metodo non disponibile. Riprova.');
                 });
               });
-              // Carico in background ma NON apro: la carta si apre solo se la scegli.
-              prepare(false);
-              setTimeout(function () {
-                var fb = document.getElementById('nexi-inline-fields');
-                if (fb &amp;&amp; !fb.querySelector('iframe')) {
-                  fail('Campi non arrivati. Premi Pay now per continuare.');
-                  syncSubmit();
-                }
-              }, 12000);
+              // Nessun prepare automatico: aprire il checkout non deve
+              // creare ordini Nexi né mandare nome/email al gateway. La
+              // sessione Build nasce solo quando il cliente sceglie Nexi
+              // (click sulla riga Carta o su un bottone APM).
             })();
           </script>
           </t>

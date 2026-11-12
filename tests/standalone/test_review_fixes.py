@@ -662,11 +662,15 @@ class RateLimitBucketTest(unittest.TestCase):
                          'chi chiede una chiave nuova viene rifiutato')
 
     def test_notify_flood_hits_the_ip_cap(self):
-        # 600 notifiche dallo stesso IP con tok diversi: il per-IP scatta.
+        # 600 notifiche dallo stesso IP con tok diversi: il guard IP scatta
+        # prima del secchiello per-ref (il controller lo applica per primo).
         allowed = 0
         for i in range(700):
+            ip = CONTROLLER._nexi_rl_key('notify-ip')
+            if not CONTROLLER._nexi_rl_allow(ip, CONTROLLER.NOTIFY_LIMIT * 10):
+                continue
             key, limit = CONTROLLER._nexi_confirm_limit(True, {'tok': 'tok-%d' % i})
-            if limit and CONTROLLER._nexi_rl_allow(key, limit):
+            if CONTROLLER._nexi_rl_allow(key, limit):
                 allowed += 1
         self.assertLessEqual(allowed, 600)
         self.assertGreater(allowed, 500)
@@ -857,6 +861,79 @@ class GlobalRateLimitTest(unittest.TestCase):
             if CONTROLLER._nexi_global_allow()
         )
         self.assertEqual(allowed, CONTROLLER.GLOBAL_LIMIT)
+
+
+
+class RateLimitOrderTest(unittest.TestCase):
+    """M1: il bucket globale si addebita solo alle richieste ammesse."""
+
+    def setUp(self):
+        CONTROLLER._NEXI_RL.clear()
+
+    def tearDown(self):
+        CONTROLLER._NEXI_RL.clear()
+
+    def test_rejected_client_does_not_spend_global(self):
+        self.assertTrue(CONTROLLER._nexi_admit('k', 1))
+        self.assertFalse(CONTROLLER._nexi_admit('k', 1))
+        self.assertEqual(
+            len(CONTROLLER._NEXI_RL.get(CONTROLLER._GLOBAL_KEY, [])), 1,
+            'la richiesta rifiutata dal per-client non tocca il globale')
+
+    def test_admitted_client_spends_global(self):
+        self.assertTrue(CONTROLLER._nexi_admit('a', 1))
+        self.assertTrue(CONTROLLER._nexi_admit('b', 1))
+        self.assertEqual(
+            len(CONTROLLER._NEXI_RL.get(CONTROLLER._GLOBAL_KEY, [])), 2)
+
+
+class NotifyBucketTest(unittest.TestCase):
+    """M5: le notifiche non condividono il secchiello quando manca il tok."""
+
+    def test_ref_gets_its_own_bucket(self):
+        first, _ = CONTROLLER._nexi_confirm_limit(True, {'ref': 'S1'})
+        second, _ = CONTROLLER._nexi_confirm_limit(True, {'ref': 'S2'})
+        self.assertNotEqual(first, second)
+        self.assertIn(CONTROLLER._nexi_rl_bucket('S1'), first)
+
+    def test_missing_ident_uses_fixed_no_ref_bucket(self):
+        key, limit = CONTROLLER._nexi_confirm_limit(True, {})
+        self.assertIn(CONTROLLER._nexi_rl_bucket('no-ref'), key)
+        self.assertEqual(limit, CONTROLLER.NOTIFY_LIMIT)
+
+    def test_tok_wins_over_ref(self):
+        key, _ = CONTROLLER._nexi_confirm_limit(
+            True, {'tok': 'tok-1', 'ref': 'S1'})
+        self.assertIn(CONTROLLER._nexi_rl_bucket('tok-1'), key)
+
+
+class LandingRouteSecurityTest(unittest.TestCase):
+    """M4: solo path relativi, niente open redirect / javascript:."""
+
+    def test_relative_route_is_preserved(self):
+        self.assertEqual(
+            CONTROLLER._nexi_landing_route('/my/invoices/42', False),
+            '/my/invoices/42')
+
+    def test_absolute_url_is_rejected(self):
+        self.assertEqual(
+            CONTROLLER._nexi_landing_route('https://evil.example', True),
+            '/shop/payment/validate')
+
+    def test_javascript_url_is_rejected(self):
+        self.assertEqual(
+            CONTROLLER._nexi_landing_route('javascript:alert(1)', False),
+            '/payment/confirmation')
+
+    def test_protocol_relative_is_rejected(self):
+        self.assertEqual(
+            CONTROLLER._nexi_landing_route('//evil.example/x', False),
+            '/payment/confirmation')
+
+    def test_status_route_falls_back(self):
+        self.assertEqual(
+            CONTROLLER._nexi_landing_route('/payment/status', True),
+            '/shop/payment/validate')
 
 
 class TokExtractionTest(unittest.TestCase):

@@ -36,6 +36,18 @@ def _nexi_global_allow():
     return _nexi_rl_allow(_GLOBAL_KEY, GLOBAL_LIMIT)
 
 
+def _nexi_admit(key, limit):
+    """Limite per-client prima del tetto globale.
+
+    Il tetto globale si addebita solo alle richieste ammesse: una richiesta
+    già rifiutata dal bucket per-client non deve poter esaurire il budget
+    condiviso e mandare in 429 le notifiche Nexi.
+    """
+    if not _nexi_rl_allow(key, limit):
+        return False
+    return _nexi_global_allow()
+
+
 def _nexi_rl_allow(key, limit, window=60):
     now = time.time()
     if len(_NEXI_RL) > 2000:
@@ -141,14 +153,13 @@ def _nexi_confirm_limit(is_notify, kw):
     invece resta per IP, perché lì è un cliente per volta.
     """
     if is_notify:
-        # Chiave a dimensione fissa: il tok lo sceglie il chiamante, non deve
-        # decidere quanto occupa in memoria né quanto vive il secchiello. Il
-        # doppio limite (IP + transazione) impedisce di ruotare tok per fare
-        # flood: chi chiama controlla anche il per-IP.
-        ip = _nexi_rl_key('notify-ip')
-        if not _nexi_rl_allow(ip, NOTIFY_LIMIT * 10):
-            return ip, 0
-        return 'nexi:notify:%s' % _nexi_rl_bucket((kw or {}).get('tok')), NOTIFY_LIMIT
+        # Chiave a dimensione fissa: il chiamante non decide quanto occupa in
+        # memoria. Il token o il ref vengono parsati PRIMA di questa chiamata
+        # (anche dal body), così notifiche di transazioni diverse non
+        # condividono più un secchiello da 60/min.
+        kw = kw or {}
+        ident = kw.get('tok') or kw.get('ref') or 'no-ref'
+        return 'nexi:notify:%s' % _nexi_rl_bucket(ident), NOTIFY_LIMIT
     return _nexi_rl_key('confirm'), BROWSER_LIMIT
 
 
@@ -173,9 +184,16 @@ def _nexi_landing_route(landing, has_order):
     della cassa; per un pagamento senza ordine (fattura, portale) non c'è una
     cassa da validare, quindi si lascia la rotta originale.
     """
-    if landing and not str(landing).startswith('/payment/status'):
-        return landing
-    return '/shop/payment/validate' if has_order else (landing or '/payment/confirmation')
+    text = str(landing or '')
+    # Solo path relativi sullo stesso sito: un landing_route arriva anche
+    # dagli URL di pagamento e non deve trasformare la conferma in un open
+    # redirect (o in un javascript:) sul dominio del negozio.
+    if (text.startswith('/') and not text.startswith('//')
+            and '\\' not in text
+            and not any(ch in text for ch in ('\r', '\n', '\t', '\x00'))
+            and not text.startswith('/payment/status')):
+        return text
+    return '/shop/payment/validate' if has_order else '/payment/confirmation'
 
 
 def _nexi_public_error(e, source='Nexi'):
@@ -309,7 +327,7 @@ class NexiController(http.Controller):
         """
         if not _nexi_csrf_ok():
             return {'error': 'Sessione scaduta. Ricarica la pagina.'}
-        if not _nexi_global_allow() or not _nexi_rl_allow(_nexi_rl_key('saved'), 30):
+        if not _nexi_admit(_nexi_rl_key('saved'), 30):
             return {'error': 'Troppe richieste. Riprova tra un minuto.'}
         order = request.website.sale_get_order()
         partner = (order.partner_invoice_id or order.partner_id) if order else request.env.user.partner_id
@@ -345,8 +363,11 @@ class NexiController(http.Controller):
         # clienti: contarle per IP bloccherebbe un negozio trafficato. Il
         # browser invece resta limitato per IP.
         is_notify = request.httprequest.method == 'POST'
-        key, limit = _nexi_confirm_limit(is_notify, kw)
-        if not _nexi_global_allow() or not _nexi_rl_allow(key, limit):
+        # Il terminale Nexi manda le notifiche dallo stesso IP: il limite IP
+        # resta davanti al body, così una raffica anonima non arriva a
+        # parsare JSON. Poi il secchiello è per ref/token, non condiviso.
+        if is_notify and not _nexi_rl_allow(
+                _nexi_rl_key('notify-ip'), NOTIFY_LIMIT * 10):
             return request.make_response('Troppe richieste. Riprova tra un minuto.', status=429)
         # kw = parametri che Nexi aggiunge al ritorno (ref, cancel, ...).
         if is_notify and not kw.get('ref'):
@@ -362,6 +383,9 @@ class NexiController(http.Controller):
                 order = body['order'].get('orderId')
             if order:
                 kw['ref'] = order
+        key, limit = _nexi_confirm_limit(is_notify, kw)
+        if not _nexi_admit(key, limit):
+            return request.make_response('Troppe richieste. Riprova tra un minuto.', status=429)
         try:
             tx = request.env['payment.transaction'].sudo()._get_tx_from_notification_data(
                 'nexi', kw
@@ -418,7 +442,7 @@ class NexiController(http.Controller):
 
     @http.route('/payment/nexi/build/<string:reference>', type='http', auth='public', website=True, methods=['GET'])
     def nexi_build(self, reference, **kw):
-        if not _nexi_global_allow() or not _nexi_rl_allow(_nexi_rl_key('build'), 30):
+        if not _nexi_admit(_nexi_rl_key('build'), 30):
             return request.make_response(
                 'Troppe richieste. Riprova tra un minuto.', status=429)
         tx = _nexi_tx_or_404(reference)
@@ -456,7 +480,7 @@ class NexiController(http.Controller):
                 return {'error': 'Metodo non disponibile su questo terminale.'}
         else:
             provider_id = None
-        if not _nexi_global_allow() or not _nexi_rl_allow(_nexi_rl_key('prepare'), 20):
+        if not _nexi_admit(_nexi_rl_key('prepare'), 20):
             return {'error': 'Troppe richieste. Riprova tra un minuto.'}
         order = request.website.sale_get_order()
         # Le stesse porte che chiude la cassa Odoo: senza queste si poteva
@@ -618,7 +642,7 @@ class NexiController(http.Controller):
         # Senza token non loggo niente: il token arriva dai nostri handler JS.
         if not _nexi_csrf_ok():
             return True
-        if not _nexi_global_allow() or not _nexi_rl_allow(_nexi_rl_key('jserror'), 10):
+        if not _nexi_admit(_nexi_rl_key('jserror'), 10):
             return True
         # Una riga sola, niente ANSI/bidi/control: i log restano puliti.
         clean = _nexi_sanitize_text(msg)
@@ -630,7 +654,7 @@ class NexiController(http.Controller):
         """Solo i campi da mostrare, mai la risposta grezza di Nexi."""
         # Limite PRIMA della lookup: altrimenti un flood senza tok fa
         # comunque una ricerca sudo per ogni richiesta.
-        if not _nexi_global_allow() or not _nexi_rl_allow(_nexi_rl_key('fields'), 30):
+        if not _nexi_admit(_nexi_rl_key('fields'), 30):
             return request.make_response(
                 json.dumps({'fields': []}), [('Content-Type', 'application/json')], status=429
             )
@@ -671,7 +695,7 @@ class NexiController(http.Controller):
         """Chiama finalize su Nexi (la chiave resta sul server). Torna url o fine."""
         if not _nexi_csrf_ok():
             return {'error': 'Sessione scaduta. Ricarica la pagina.'}
-        if not _nexi_global_allow() or not _nexi_rl_allow(_nexi_rl_key('finalize'), 30):
+        if not _nexi_admit(_nexi_rl_key('finalize'), 30):
             return {'error': 'Troppe richieste. Riprova tra un minuto.'}
         tx = _nexi_tx_or_404(reference)
         if not tx or not tx.nexi_build_session:
