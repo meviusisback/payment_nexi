@@ -206,6 +206,106 @@ class TestNexiReview(TransactionCase):
             tx._process_notification_data({})
         self.assertEqual(tx.state, 'error', 'importo diverso: non deve chiudere')
 
+    def test_auth_executed_without_capture_stays_pending(self):
+        """H1: un'AUTHORIZATION EXECUTED non prova l'incasso."""
+        tx = self._new_tx()
+        data = {
+            'orderId': tx.reference,
+            'operations': [{
+                'operationType': 'AUTHORIZATION',
+                'operationResult': 'EXECUTED',
+                'operationAmount': '1000',
+                'operationCurrency': 'EUR',
+                'operationTime': '2026-10-30T10:00:00',
+                'paymentInstrumentInfo': '**** 1234',
+            }],
+        }
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
+            tx._process_notification_data({})
+        self.assertEqual(tx.state, 'pending', 'autorizzato non è incassato')
+
+    def test_auth_with_zero_captured_stays_pending(self):
+        """H1: capturedAmount 0 esplicito -> nessuna chiusura."""
+        tx = self._new_tx()
+        data = self._nexi_answer(
+            tx.reference, 0,
+            ('AUTHORIZATION', 'EXECUTED', '2026-10-30T10:00:00'),
+        )
+        data['orderStatus']['capturedAmount'] = '0'
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
+            tx._process_notification_data({})
+        self.assertEqual(tx.state, 'pending')
+
+    def test_order_level_capture_proves_done_without_capture_operation(self):
+        """H1: capturedAmount ordine >= atteso è prova d'incasso."""
+        tx = self._new_tx()
+        data = self._nexi_answer(
+            tx.reference, 1000,
+            ('AUTHORIZATION', 'EXECUTED', '2026-10-30T10:00:00'),
+        )
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
+            tx._process_notification_data({})
+        self.assertEqual(tx.state, 'done')
+
+    def test_later_declined_auth_does_not_cancel_capture(self):
+        """H1: un declino successivo non annulla un CAPTURE eseguito."""
+        tx = self._new_tx()
+        data = {
+            'orderId': tx.reference,
+            'operations': [
+                {
+                    'operationType': 'CAPTURE',
+                    'operationResult': 'EXECUTED',
+                    'operationAmount': '1000',
+                    'operationCurrency': 'EUR',
+                    'operationTime': '2026-10-30T10:00:05',
+                },
+                {
+                    'operationType': 'AUTHORIZATION',
+                    'operationResult': 'DECLINED',
+                    'operationAmount': '1000',
+                    'operationCurrency': 'EUR',
+                    'operationTime': '2026-10-30T10:00:06',
+                },
+            ],
+        }
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
+            tx._process_notification_data({})
+        self.assertEqual(tx.state, 'done', 'i soldi sono stati presi')
+
+    def test_refund_after_capture_still_cancels(self):
+        """H1: uno storno dopo l'incasso vince sul capture sticky."""
+        tx = self._new_tx()
+        data = {
+            'orderId': tx.reference,
+            'operations': [
+                {
+                    'operationType': 'CAPTURE',
+                    'operationResult': 'EXECUTED',
+                    'operationAmount': '1000',
+                    'operationCurrency': 'EUR',
+                    'operationTime': '2026-10-30T10:00:05',
+                },
+                {
+                    'operationType': 'REFUND',
+                    'operationResult': 'EXECUTED',
+                    'operationAmount': '1000',
+                    'operationCurrency': 'EUR',
+                    'operationTime': '2026-10-30T10:00:06',
+                },
+                {
+                    'operationType': 'AUTHORIZATION',
+                    'operationResult': 'DECLINED',
+                    'operationAmount': '1000',
+                    'operationCurrency': 'EUR',
+                    'operationTime': '2026-10-30T10:00:07',
+                },
+            ],
+        }
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
+            tx._process_notification_data({})
+        self.assertEqual(tx.state, 'cancel')
+
     def test_method_hidden_only_on_the_terminal_that_refuses_it(self):
         other = self.provider.copy({'name': 'Nexi secondo terminale'})
         self.env['payment.nexi.method.availability'].create({

@@ -111,10 +111,13 @@ def _nexi_capture_total(data, op, currency=None):
         if got is not None:
             return got
     op = op if isinstance(op, dict) else {}
-    for raw in (op.get('operationAmount'), op.get('capturedAmount')):
-        got = _parse_cents(raw) if raw not in (None, '') else None
-        if got is not None:
-            return got
+    # Solo un CAPTURE porta un incasso: l'importo di un'AUTHORIZATION è
+    # un'autorizzazione, non soldi presi.
+    if str(op.get('operationType') or '').upper() == 'CAPTURE':
+        for raw in (op.get('operationAmount'), op.get('capturedAmount')):
+            got = _parse_cents(raw) if raw not in (None, '') else None
+            if got is not None:
+                return got
     total = 0
     found = False
     operations = data.get('operations')
@@ -134,6 +137,33 @@ def _nexi_capture_total(data, op, currency=None):
             total += got
             found = True
     return total if found else None
+
+
+def _nexi_reversal_after_capture(data, capture_op):
+    """True se dopo l'incasso c'è uno storno/rimborso eseguito.
+
+    Un CAPTURE eseguito non deve essere annullato da un declino successivo
+    (es. nuovo tentativo dello stesso ordine), ma un VOID/REFUND arrivato
+    dopo l'incasso sì. Senza date non posso escludere lo storno: fail-closed.
+    """
+    data = data if isinstance(data, dict) else {}
+    capture_ts = _nexi_op_ts(capture_op) if capture_op else None
+    operations = data.get('operations')
+    for item in (operations if isinstance(operations, list) else []):
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get('operationType') or '').upper()
+        result = str(item.get('operationResult') or '').upper()
+        reversal_result = result in ('VOIDED', 'REFUNDED')
+        reversal_kind = kind in ('VOID', 'REFUND', 'CANCELLATION', 'CANCEL_ORDER')
+        if not (reversal_result or reversal_kind):
+            continue
+        if kind in ('AUTHORIZATION', 'CAPTURE') and not reversal_result:
+            continue
+        ts = _nexi_op_ts(item)
+        if capture_ts is None or ts is None or ts >= capture_ts:
+            return True
+    return False
 
 
 def _nexi_safe_fields(fields):
@@ -1171,6 +1201,11 @@ class PaymentTransactionNexi(models.Model):
             # l'operazione che ha deciso porta meno del totale, vale il meno:
             # si chiude solo quando ogni numero visto copre l'atteso.
             total = _nexi_capture_total(data, op, currency=want_cur)
+            if op_kind != 'capture' and (total is None or total <= 0):
+                # Autorizzazione senza prova d'incasso: non è un pagamento
+                # chiuso. Resta in attesa, il cron la riverifica.
+                self._set_pending(state_message='Nexi autorizzato, in attesa di incasso.')
+                return
             if total is None:
                 total = got
             if got is not None and total is not None and got < total:
@@ -1213,6 +1248,27 @@ class PaymentTransactionNexi(models.Model):
             # Niente cattura manuale: resta in attesa invece di andare in errore.
             self._set_pending(state_message=f'Nexi autorizzato: {result}')
         elif result in KO_RESULTS:
+            expected = to_cents(self.amount)
+            captured = _nexi_capture_total(data, None, currency=self.currency_id.name)
+            capture_op = _nexi_latest_operation(data, CAPTURE_OPS)
+            if result not in ('REFUNDED', 'VOIDED') and captured is not None:
+                if captured == expected and not _nexi_reversal_after_capture(data, capture_op):
+                    # Incasso già eseguito: un declino successivo (nuovo
+                    # tentativo) non annulla i soldi presi.
+                    self.sudo().write({'nexi_uncertain': False})
+                    self._set_done(
+                        state_message=f'Nexi OK: incasso eseguito ({result} successivo)')
+                    return
+                if captured > expected and not _nexi_reversal_after_capture(data, capture_op):
+                    _logger.error(
+                        'Nexi %s: incassato %s cent > atteso %s cent '
+                        '(order=%s): verifica manuale.',
+                        self.reference, captured, expected,
+                        self.nexi_order_id or self.reference,
+                    )
+                    self.sudo().write({'nexi_uncertain': False})
+                    self._set_error('Nexi incasso non corrispondente. Verifica manuale.')
+                    return
             self.sudo().write({'nexi_uncertain': False})
             self._set_canceled(state_message=f'Nexi KO: {result}')
         else:

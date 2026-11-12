@@ -912,5 +912,69 @@ class TokExtractionTest(unittest.TestCase):
         self.assertIsNone(CONTROLLER._nexi_tok())
 
 
+
+class CaptureEvidenceTest(unittest.TestCase):
+    """H1: un'autorizzazione non è un incasso."""
+
+    AUTH = {
+        'operationType': 'AUTHORIZATION',
+        'operationResult': 'EXECUTED',
+        'operationAmount': '1000',
+        'operationCurrency': 'EUR',
+        'operationTime': '2026-10-30T10:00:00',
+    }
+    CAPTURE = {
+        'operationType': 'CAPTURE',
+        'operationResult': 'EXECUTED',
+        'operationAmount': '1000',
+        'operationCurrency': 'EUR',
+        'operationTime': '2026-10-30T10:00:05',
+    }
+
+    def test_authorization_amount_is_not_capture(self):
+        data = {'operations': [self.AUTH]}
+        self.assertIsNone(
+            TRANSACTION._nexi_capture_total(data, self.AUTH, 'EUR'))
+
+    def test_capture_operation_amount_is_capture(self):
+        data = {'operations': [self.CAPTURE]}
+        self.assertEqual(
+            TRANSACTION._nexi_capture_total(data, self.CAPTURE, 'EUR'), 1000)
+
+    def test_order_level_capture_wins(self):
+        data = {'orderStatus': {'capturedAmount': '1000'},
+                'operations': [self.AUTH]}
+        self.assertEqual(
+            TRANSACTION._nexi_capture_total(data, self.AUTH, 'EUR'), 1000)
+
+    def test_reversal_after_capture_is_detected(self):
+        refund = {
+            'operationType': 'REFUND',
+            'operationResult': 'EXECUTED',
+            'operationAmount': '1000',
+            'operationTime': '2026-10-30T10:00:06',
+        }
+        data = {'operations': [self.CAPTURE, refund]}
+        self.assertTrue(
+            TRANSACTION._nexi_reversal_after_capture(data, self.CAPTURE))
+
+    def test_reversal_before_capture_does_not_count(self):
+        refund = {
+            'operationType': 'REFUND',
+            'operationResult': 'EXECUTED',
+            'operationAmount': '1000',
+            'operationTime': '2026-10-30T10:00:00',
+        }
+        data = {'operations': [refund, self.CAPTURE]}
+        self.assertFalse(
+            TRANSACTION._nexi_reversal_after_capture(data, self.CAPTURE))
+
+    def test_reversal_without_dates_is_fail_closed(self):
+        refund = {'operationType': 'REFUND', 'operationResult': 'EXECUTED'}
+        data = {'operations': [self.CAPTURE, refund]}
+        self.assertTrue(
+            TRANSACTION._nexi_reversal_after_capture(data, self.CAPTURE))
+
+
 if __name__ == '__main__':
     unittest.main()
