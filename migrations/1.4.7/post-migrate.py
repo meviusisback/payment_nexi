@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-"""#11: segna come avviate le draft con un ordine gia' creato su Nexi.
+"""#11: mark as started the drafts with an order already created on Nexi.
 
-Il cron ora riconcilia anche le transazioni rimaste draft, ma solo quelle con
-`nexi_order_started`: una draft senza ordine e' un carrello mai arrivato al
-gateway e non va sondata. Per le installazioni esistenti l'unico caso
-ricostruibile senza rischi e' la Build, che salva `nexi_build_session` appena
-l'ordine esiste. Per l'HPP il gateway non lascia traccia locale: quelle draft
-restano fuori dal cron, come prima. Idempotente.
+The cron now also reconciles the transactions left in draft, but only those
+with `nexi_order_started`: a draft without an order is a cart that never
+reached the gateway and must not be probed. For existing installations the only
+case that can be reconstructed safely is Build, which saves
+`nexi_build_session` as soon as the order exists. For HPP the gateway leaves no
+local trace: those drafts stay out of the cron, as before. Idempotent.
 """
 
 

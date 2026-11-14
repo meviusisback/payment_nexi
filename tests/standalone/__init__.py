@@ -1,2 +1,2 @@
 # -*- coding: utf-8 -*-
-"""Test senza Odoo. Non sono test Odoo: il runner di Odoo non li importa."""
+"""Tests without Odoo. They are not Odoo tests: the Odoo runner does not import them."""

@@ -1,0 +1,815 @@
+# Translation of payment_nexi to Italian.
+# Shopper-facing strings are English msgids in the code; this file gives the
+# Italian text back for Italian shops. Other languages fall back to English.
+msgid ""
+msgstr ""
+"Project-Id-Version: payment_nexi 1.4.10\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-11-14 00:00+0000\n"
+"PO-Revision-Date: 2026-11-14 00:00+0000\n"
+"Last-Translator: \n"
+"Language-Team: Italian\n"
+"Language: it\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#. module: payment_nexi
+#: model:ir.model.constraint,message:payment_nexi.constraint_payment_nexi_method_availability_provider_method_uniq
+msgid "A method can appear only once per terminal."
+msgstr "Un metodo può comparire una volta sola per terminale."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/controllers/main.py:0
+msgid "A payment is already in progress. Try again in a moment."
+msgstr "Pagamento già in corso. Riprova tra un istante."
+
+#. module: payment_nexi
+#: model:payment.method,name:payment_nexi.payment_method_nexi_applepay
+msgid "Apple Pay"
+msgstr ""
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Back to checkout"
+msgstr "Torna alla cassa"
+
+#. module: payment_nexi
+#: model:payment.method,name:payment_nexi.payment_method_nexi_bancomatpay
+msgid "Bancomat Pay"
+msgstr ""
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/controllers/main.py:0
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid ""
+"Build requires a public URL (Shop public base or web.base.url); localhost is"
+" not accepted. Use HPP for local tests."
+msgstr "Build vuole URL pubblico (Base pubblica negozio o web.base.url), localhost non va. Usa HPP per i test locali."
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_transaction__nexi_build_session
+msgid "Build session"
+msgstr "Sessione Build"
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_transaction__nexi_build_token
+msgid "Build token"
+msgstr "Token Build"
+
+#. module: payment_nexi
+#: model:ir.model.fields,help:payment_nexi.field_payment_transaction__nexi_contract_id
+msgid "CIT contractId created on the first payment, reused afterwards."
+msgstr "contractId CIT creato al primo pagamento, riusato dopo."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Card field"
+msgstr "campo carta"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/controllers/main.py:0
+msgid "Card method missing."
+msgstr "Metodo carta mancante."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Card number"
+msgstr "Numero carta"
+
+#. module: payment_nexi
+#: model_terms:ir.ui.view,arch_db:payment_nexi.view_provider_nexi
+msgid "Check methods on Nexi"
+msgstr "Verifica metodi su Nexi"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Check this field."
+msgstr "Controlla questo campo."
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_provider__nexi_methods_report
+msgid "Checked methods"
+msgstr "Metodi verificati"
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_nexi_method_availability__checked_at
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_provider__nexi_methods_checked
+msgid "Checked on"
+msgstr "Verifica del"
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_provider__nexi_mode
+msgid "Checkout mode"
+msgstr "Modalità"
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_provider__code
+msgid "Code"
+msgstr ""
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Confirmation failed. Try again."
+msgstr "Conferma non riuscita. Riprova."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Continue"
+msgstr "Continua"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Could not save the selected card. Try again."
+msgstr "Non riesco a salvare la carta scelta. Riprova."
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_nexi_method_availability__create_uid
+msgid "Created by"
+msgstr ""
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_nexi_method_availability__create_date
+msgid "Created on"
+msgstr ""
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_nexi_method_availability__display_name
+msgid "Display Name"
+msgstr ""
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Email"
+msgstr "Email"
+
+#. module: payment_nexi
+#: model:ir.model.fields.selection,name:payment_nexi.selection__payment_provider__nexi_mode__build
+msgid "Embedded Build v3 (beta)"
+msgstr "Embedded Build v3 (beta)"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/controllers/main.py:0
+msgid "Embedded checkout is not enabled."
+msgstr "Build non attiva."
+
+#. module: payment_nexi
+#: model_terms:ir.ui.view,arch_db:payment_nexi.view_provider_nexi
+msgid "Empty = web.base.url, e.g. https://shop.example.com"
+msgstr "Vuota = web.base.url, es. https://negozio.example.com"
+
+#. module: payment_nexi
+#: model_terms:ir.ui.view,arch_db:payment_nexi.view_provider_nexi
+msgid "Empty=all, e.g. GOOGLEPAY"
+msgstr "Vuoto=tutti, es. GOOGLEPAY"
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_provider__nexi_env
+msgid "Environment"
+msgstr "Ambiente"
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_transaction__nexi_reverify_count
+msgid "Error recheck attempts"
+msgstr "Tentativi riverifica errori"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Expiry date"
+msgstr "Scadenza"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "First and last name"
+msgstr "Nome e cognome"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Form could not be loaded. Try again."
+msgstr "Form non caricato. Riprova."
+
+#. module: payment_nexi
+#: model:ir.model.fields,help:payment_nexi.field_payment_provider__nexi_prod_url
+msgid "Full production URL from the API page on developer.nexi.it."
+msgstr "URL produzione completo dalla scheda API su developer.nexi.it."
+
+#. module: payment_nexi
+#: model:ir.model.fields,help:payment_nexi.field_payment_provider__nexi_test_url
+msgid ""
+"Full test URL from the API page on developer.nexi.it (e.g. the Payments "
+"page)."
+msgstr "URL test completo dalla scheda API su developer.nexi.it (es. pagina Pagamenti)."
+
+#. module: payment_nexi
+#: model:payment.method,name:payment_nexi.payment_method_nexi_googlepay
+msgid "Google Pay"
+msgstr ""
+
+#. module: payment_nexi
+#: model:ir.model.fields,help:payment_nexi.field_payment_provider__nexi_mode
+msgid ""
+"HPP = redirect to the Nexi page. Build = form on your site with Nexi iframes"
+" (needs a public URL; localhost is not accepted)."
+msgstr "HPP = vai su pagina Nexi. Build = form nel tuo sito con iframe Nexi (serve URL pubblico, localhost non va)."
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_method__nexi_disabled
+msgid "Hidden on every Nexi terminal"
+msgstr "Nascosto su ogni terminale Nexi"
+
+#. module: payment_nexi
+#: model:ir.model.fields.selection,name:payment_nexi.selection__payment_provider__nexi_mode__hpp
+msgid "Hosted Page (redirect)"
+msgstr "Hosted Page (redirect)"
+
+#. module: payment_nexi
+#: model:ir.model.fields,help:payment_nexi.field_payment_transaction__nexi_reverify_count
+msgid ""
+"How many times the cron rechecked an uncertain error. Separate counter from "
+"nexi_reconcile_count."
+msgstr "Quante volte il cron ha riverificato un errore incerto. Contatore separato da nexi_reconcile_count."
+
+#. module: payment_nexi
+#: model:ir.model.fields,help:payment_nexi.field_payment_transaction__nexi_reconcile_count
+msgid ""
+"How many times the cron rechecked this transaction on Nexi. Past the limit "
+"it is left alone."
+msgstr "Quante volte il cron ha riverificato questa transazione su Nexi. Oltre il limite la transazione viene lasciata stare."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "I have read the Nexi privacy policy ("
+msgstr "Ho letto l'informativa privacy Nexi ("
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_nexi_method_availability__id
+msgid "ID"
+msgstr ""
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_provider.py:0
+msgid "Invalid Nexi URL: HTTPS on a Nexi domain is required."
+msgstr "URL Nexi non valido: serve https su un dominio Nexi."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Invalid Nexi amount."
+msgstr "Nexi importo non valido."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/controllers/main.py:0
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Invalid Nexi method."
+msgstr "Metodo Nexi non valido."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Invalid Nexi response."
+msgstr "Risposta Nexi non valida."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/controllers/main.py:0
+#: code:addons/payment_nexi/models/payment_provider.py:0
+msgid "Invalid Nexi response. Try again."
+msgstr "Nexi risposta non valida. Riprova."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Invalid Nexi return."
+msgstr "Ritorno Nexi non valido."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Invalid data. Check and try again."
+msgstr "Dati non validi. Controlla e riprova."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/controllers/main.py:0
+msgid "Invalid order."
+msgstr "Ordine non valido."
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_transaction__nexi_last_result
+msgid "Last Nexi outcome"
+msgstr "Ultimo esito Nexi"
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_nexi_method_availability__write_uid
+msgid "Last Updated by"
+msgstr ""
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_nexi_method_availability__write_date
+msgid "Last Updated on"
+msgstr ""
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_transaction__nexi_last_captured
+msgid "Last captured (cents)"
+msgstr "Ultimo incassato (cent)"
+
+#. module: payment_nexi
+#: model:ir.model.fields,help:payment_nexi.field_payment_provider__nexi_methods_report
+msgid "Last check against Nexi: which paymentServices the terminal accepts."
+msgstr "Ultimo controllo su Nexi: quali paymentService il terminale accetta."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Last name"
+msgstr "Cognome"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Loading card fields…"
+msgstr "Carico i campi carta…"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Loading payment methods…"
+msgstr "Carico i metodi…"
+
+#. module: payment_nexi
+#: model:ir.model.fields,help:payment_nexi.field_payment_transaction__nexi_masked_pan
+msgid "Masked number from Nexi (e.g. ****7289). Never the real card."
+msgstr "Numero mascherato da Nexi (es. ****7289). Mai la carta vera."
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_nexi_method_availability__method_id
+msgid "Method"
+msgstr "Metodo"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_provider.py:0
+msgid "Method check aborted: check X-Api-Key and Nexi URL (%s)."
+msgstr "Verifica metodi interrotta: controlla X-Api-Key e URL Nexi (%s)."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/controllers/main.py:0
+msgid "Method not available on this terminal."
+msgstr "Metodo non disponibile su questo terminale."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Method not available. Try again."
+msgstr "Metodo non disponibile. Riprova."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Nexi SDK could not be loaded. Try again."
+msgstr "SDK Nexi non caricato. Riprova."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_provider.py:0
+msgid ""
+"Nexi URL is missing. Enter the test/production URL from the API page on "
+"developer.nexi.it."
+msgstr "Manca URL Nexi. Metti URL test/produzione dalla scheda API su developer.nexi.it."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/controllers/main.py:0
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Nexi X-Api-Key is missing in the provider."
+msgstr "Manca la X-Api-Key Nexi nel provider."
+
+#. module: payment_nexi
+#: model:ir.model.fields.selection,name:payment_nexi.selection__payment_provider__code__nexi
+msgid "Nexi XPay Web"
+msgstr "Nexi XPay Web"
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_transaction__nexi_access_token
+msgid "Nexi access token"
+msgstr "Codice accesso Nexi"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Nexi authorized, waiting for capture."
+msgstr "Nexi autorizzato, in attesa di incasso."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Nexi capture incomplete."
+msgstr "Nexi incasso non completo."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Nexi captured amount does not match. Manual check required."
+msgstr "Nexi incasso non corrispondente. Verifica manuale."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Nexi did not return the payment page."
+msgstr "Nexi non ha dato la pagina di pagamento."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Nexi error. Try again."
+msgstr "Errore Nexi. Riprova."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_provider.py:0
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Nexi is unreachable. Try again."
+msgstr "Nexi non raggiungibile. Riprova."
+
+#. module: payment_nexi
+#: model:ir.model,name:payment_nexi.model_payment_nexi_method_availability
+msgid "Nexi methods per terminal"
+msgstr "Metodi Nexi per terminale"
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_transaction__nexi_order_id
+msgid "Nexi order ID"
+msgstr "ID ordine Nexi"
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_transaction__nexi_order_started
+msgid "Nexi order started"
+msgstr "Ordine Nexi avviato"
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_provider__nexi_prod_url
+msgid "Nexi production URL"
+msgstr "URL produzione Nexi"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid ""
+"Nexi refund is not enabled: the back-office URL from developer.nexi.it is "
+"missing."
+msgstr "Rimborso Nexi non attivo: manca URL back office da developer.nexi.it."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/controllers/main.py:0
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Nexi supports EUR only."
+msgstr "Nexi attiva solo in EUR."
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_provider__nexi_test_url
+msgid "Nexi test URL"
+msgstr "URL test Nexi"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Nexi: "
+msgstr "Nexi: "
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_provider.py:0
+msgid "Nexi: %s"
+msgstr "Nexi: %s"
+
+#. module: payment_nexi
+#: model:ir.actions.server,name:payment_nexi.ir_cron_nexi_reconcile_ir_actions_server
+msgid "Nexi: recheck payments left pending"
+msgstr "Nexi: riverifica i pagamenti rimasti in attesa"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_provider.py:0
+msgid "No Nexi method to check."
+msgstr "Nessun metodo Nexi da verificare."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "No card field available."
+msgstr "Nessun campo carta disponibile."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "No payment method available on this terminal."
+msgstr "Nessun metodo disponibile su questo terminale."
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_provider__nexi_oneclick
+msgid "OneClick CIT"
+msgstr "OneClick CIT"
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_transaction__nexi_contract_id
+msgid "OneClick contract"
+msgstr "Contratto OneClick"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Only the system can write Nexi data."
+msgstr "Solo il sistema puo scrivere i dati Nexi."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/controllers/main.py:0
+msgid "Order already paid."
+msgstr "Ordine già pagato."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid ""
+"Order reference too long for Nexi (max 27 characters): shorten the payment "
+"reference prefix."
+msgstr "Riferimento ordine troppo lungo per Nexi (max 27 caratteri): accorcia il prefisso dei riferimenti di pagamento."
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_nexi_method_availability__detail
+msgid "Outcome"
+msgstr "Esito"
+
+#. module: payment_nexi
+#: model:ir.model.fields,help:payment_nexi.field_payment_provider__nexi_payment_service
+msgid ""
+"Passed to Nexi as paymentService. Empty = all methods. Values from the "
+"PaymentService code table (e.g. GOOGLEPAY). Uppercase letters, digits and "
+"underscores only."
+msgstr "Passato come paymentService a Nexi. Vuoto = tutti i metodi. Valori da tabella codifica PaymentService (es. GOOGLEPAY). Solo maiuscole, cifre, underscore."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Pay now"
+msgstr "Paga adesso"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Pay on Nexi"
+msgstr "Paga su Nexi"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Pay with Nexi"
+msgstr "Paga con Nexi"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Pay without leaving the site. Card data stays with Nexi."
+msgstr "Paghi senza uscire dal sito. I dati carta restano su Nexi."
+
+#. module: payment_nexi
+#: model:payment.method,name:payment_nexi.payment_method_nexi_paypal_bnpl
+msgid "PayPal Pay in 3"
+msgstr "PayPal Paga in 3"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/controllers/main.py:0
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "PayPal Pay in 3 requires an order of at least €30.00."
+msgstr "PayPal Paga in 3 richiede almeno 30,00 € di ordine."
+
+#. module: payment_nexi
+#: model:ir.model,name:payment_nexi.model_payment_method
+msgid "Payment Method"
+msgstr ""
+
+#. module: payment_nexi
+#: model:ir.model,name:payment_nexi.model_payment_provider
+msgid "Payment Provider"
+msgstr ""
+
+#. module: payment_nexi
+#: model:ir.model,name:payment_nexi.model_payment_transaction
+msgid "Payment Transaction"
+msgstr ""
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Payment methods could not be loaded. Try again."
+msgstr "Metodi non caricati. Riprova."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/controllers/main.py:0
+msgid "Payment unavailable. Try again."
+msgstr "Pagamento non disponibile. Riprova."
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_provider__nexi_payment_service
+msgid "Preselected method"
+msgstr "Metodo preselezionato"
+
+#. module: payment_nexi
+#: model:ir.model.fields.selection,name:payment_nexi.selection__payment_provider__nexi_env__prod
+msgid "Production"
+msgstr "Produzione"
+
+#. module: payment_nexi
+#: model_terms:ir.ui.view,arch_db:payment_nexi.view_provider_nexi
+msgid "Production URL from developer.nexi.it/it/api/..."
+msgstr "URL produzione da developer.nexi.it/it/api/..."
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_transaction__nexi_reconcile_count
+msgid "Reconciliation attempts"
+msgstr "Tentativi riconciliazione"
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_nexi_method_availability__disabled
+msgid "Refused by terminal"
+msgstr "Rifiutato dal terminale"
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_transaction__nexi_masked_pan
+msgid "Saved card"
+msgstr "Carta salvata"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Security code"
+msgstr "Codice di sicurezza"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/controllers/main.py:0
+msgid "Session expired. Reload the page."
+msgstr "Sessione scaduta. Ricarica la pagina."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid ""
+"Session expired: fields refreshed, fill them in again and press Pay now."
+msgstr "Sessione scaduta: campi rinnovati, ricompila e premi Pay now."
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_provider__nexi_public_base
+msgid "Shop public base"
+msgstr "Base pubblica negozio"
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_nexi_method_availability__provider_id
+msgid "Terminal"
+msgstr "Terminale"
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_provider__nexi_method_availability_ids
+#: model_terms:ir.ui.view,arch_db:payment_nexi.view_provider_nexi
+msgid "Terminal methods"
+msgstr "Metodi del terminale"
+
+#. module: payment_nexi
+#: model:ir.model.fields.selection,name:payment_nexi.selection__payment_provider__nexi_env__test
+msgid "Test"
+msgstr "Test"
+
+#. module: payment_nexi
+#: model_terms:ir.ui.view,arch_db:payment_nexi.view_provider_nexi
+msgid "Test URL from developer.nexi.it/it/api/..."
+msgstr "URL test da developer.nexi.it/it/api/..."
+
+#. module: payment_nexi
+#: model:ir.model.fields,help:payment_nexi.field_payment_nexi_method_availability__disabled
+msgid "The Nexi check answered \"service not enabled\"."
+msgstr "La verifica su Nexi ha risposto \"servizio non attivo\"."
+
+#. module: payment_nexi
+#: model:ir.model.fields,help:payment_nexi.field_payment_provider__code
+msgid "The technical code of this payment provider."
+msgstr ""
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Tick the privacy box to continue."
+msgstr "Spunta la privacy per continuare."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/controllers/main.py:0
+msgid "Too many requests. Try again in one minute."
+msgstr "Troppe richieste. Riprova tra un minuto."
+
+#. module: payment_nexi
+#: model:ir.model.fields,help:payment_nexi.field_payment_transaction__nexi_order_started
+msgid ""
+"True once the order was created on Nexi. From then on the cron may reconcile"
+" even a draft transaction."
+msgstr "True quando l'ordine è stato creato su Nexi. Da lì il cron può riconciliare anche una transazione rimasta draft."
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_transaction__nexi_uncertain
+msgid "Uncertain outcome"
+msgstr "Esito incerto"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Use a new card"
+msgstr "Usa una nuova carta"
+
+#. module: payment_nexi
+#: model:ir.model.fields,help:payment_nexi.field_payment_method__nexi_disabled
+msgid ""
+"When checked, the method is not offered at checkout on any Nexi provider. To"
+" disable it on a single terminal use the \"Check methods on Nexi\" button on"
+" the provider form."
+msgstr "Se spuntato, il metodo non esce in cassa su nessun provider Nexi. Per spegnerlo su un solo terminale usa il pulsante \"Verifica metodi\" nella scheda del provider."
+
+#. module: payment_nexi
+#: model:ir.model.fields,help:payment_nexi.field_payment_provider__nexi_oneclick
+msgid ""
+"When enabled: the first payment creates a CIT contract, later ones reuse the"
+" contractId via HPP."
+msgstr "Se attivo: primo pagamento crea contratto CIT, i dopo riusano contractId via HPP."
+
+#. module: payment_nexi
+#: model:ir.model.fields,field_description:payment_nexi.field_payment_provider__nexi_api_key
+msgid "X-Api-Key"
+msgstr "X-Api-Key"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_provider.py:0
+msgid "X-Api-Key is missing: methods cannot be checked without it."
+msgstr "Manca la X-Api-Key: senza chiave non posso verificare i metodi."
+
+#. module: payment_nexi
+#: model:ir.model.fields,help:payment_nexi.field_payment_provider__nexi_api_key
+msgid "XPay Web terminal key."
+msgstr "Chiave del terminale XPay Web."
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "You are about to pay with Nexi…"
+msgstr "Stai per pagare con Nexi…"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "You are being redirected to Nexi…"
+msgstr "Stai andando su Nexi…"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Your cards"
+msgstr "Le tue carte"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "click here if it does not start"
+msgstr "clicca qui se non parte"
+
+#. module: payment_nexi
+#: model:ir.model.fields,help:payment_nexi.field_payment_provider__nexi_public_base
+msgid "e.g. https://shop.example.com. If empty, web.base.url is used."
+msgstr "Es. https://negozio.example.com. Se vuota, usa web.base.url."
+
+#. module: payment_nexi
+#: model_terms:ir.ui.view,arch_db:payment_nexi.build_page
+#: model_terms:ir.ui.view,arch_db:payment_nexi.view_payment_form_nexi_build
+msgid "nexi.it/privacy/xpay"
+msgstr ""

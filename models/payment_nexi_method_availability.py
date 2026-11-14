@@ -1,34 +1,34 @@
 # -*- coding: utf-8 -*-
-"""Disponibilità dei metodi Nexi, separata per terminale (provider).
+"""Nexi method availability, kept per terminal (provider).
 
-Un negozio può avere più terminali Nexi (es. uno per azienda o per ambiente) e
-i metodi attivi non sono gli stessi su tutti: la verifica va salvata per
-terminale, non sul metodo condiviso.
+A shop can have several Nexi terminals (e.g. one per company or per
+environment) and the active methods are not the same on all of them: the check
+must be stored per terminal, not on the shared method.
 """
 from odoo import fields, models
 
 
 class PaymentNexiMethodAvailability(models.Model):
     _name = 'payment.nexi.method.availability'
-    _description = 'Metodi Nexi per terminale'
+    _description = 'Nexi methods per terminal'
     _rec_name = 'method_id'
 
     provider_id = fields.Many2one(
-        'payment.provider', string='Terminale', required=True,
+        'payment.provider', string='Terminal', required=True,
         ondelete='cascade', index=True,
     )
     method_id = fields.Many2one(
-        'payment.method', string='Metodo', required=True,
+        'payment.method', string='Method', required=True,
         ondelete='cascade', index=True,
     )
     disabled = fields.Boolean(
-        string='Rifiutato dal terminale',
-        help='La verifica su Nexi ha risposto "servizio non attivo".',
+        string='Refused by terminal',
+        help='The Nexi check answered "service not enabled".',
     )
-    checked_at = fields.Datetime(string='Verifica del', readonly=True)
-    detail = fields.Char(string='Esito', readonly=True)
+    checked_at = fields.Datetime(string='Checked on', readonly=True)
+    detail = fields.Char(string='Outcome', readonly=True)
 
     _sql_constraints = [
         ('provider_method_uniq', 'unique(provider_id, method_id)',
-         'Un metodo può comparire una volta sola per terminale.'),
+         'A method can appear only once per terminal.'),
     ]

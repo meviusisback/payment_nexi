@@ -1,31 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
-  <!-- Form di redirect: Odoo lo invia da solo verso Nexi. -->
+  <!-- Redirect form: Odoo sends it to Nexi by itself. -->
   <template id="redirect_form" name="Nexi Redirect">
     <form t-att-action="api_url" method="GET">
       <t t-foreach="url_params.items()" t-as="p">
         <input type="hidden" t-att-name="p[0]" t-att-value="p[1]"/>
       </t>
-      <p>Stai andando su Nexi… <button type="submit" class="btn btn-primary">Paga su Nexi</button></p>
-      <p><a t-att-href="redirect_url">clicca qui se non parte</a></p>
+      <p><t t-esc="nexi_ui['redirect_intro']"/> <button type="submit" class="btn btn-primary"><t t-esc="nexi_ui['pay_on_nexi']"/></button></p>
+      <p><a t-att-href="redirect_url"><t t-esc="nexi_ui['redirect_fallback']"/></a></p>
     </form>
   </template>
 
-  <!-- Redirect Build: il contratto del redirect Odoo è un <form>.
-       _processRedirectFlow cerca `querySelector('form')` e lo invia: senza
-       form il client va in null reference. Il form qui NON porta a Nexi, ma
-       alla pagina Build (iframe SDK) che fa il resto. GET perché la rotta
-       accetta solo GET; il token va come campo: nella query dell'action i
-       browser la scarterebbero al submit. -->
+  <!-- Build redirect: the Odoo redirect contract is a <form>.
+       _processRedirectFlow looks for `querySelector('form')` and submits it:
+       without a form the client hits a null reference. This form does NOT lead
+       to Nexi, but to the Build page (iframe SDK) that does the rest. GET
+       because the route only accepts GET; the token goes as a field: in the
+       action query the browser would drop it on submit. -->
   <template id="redirect_build" name="Nexi Build Redirect">
     <form t-att-action="build_page_url or redirect_url" method="GET">
       <input type="hidden" name="tok" t-att-value="build_tok"/>
-      <p>Stai per pagare con Nexi… <button type="submit" class="btn btn-primary">Continua</button></p>
-      <p><a t-att-href="redirect_url">clicca qui se non parte</a></p>
+      <p><t t-esc="nexi_ui['build_redirect_intro']"/> <button type="submit" class="btn btn-primary"><t t-esc="nexi_ui['continue']"/></button></p>
+      <p><a t-att-href="redirect_url"><t t-esc="nexi_ui['redirect_fallback']"/></a></p>
     </form>
   </template>
 
-  <!-- Pagina Build v3: SDK Nexi + iframe metodi/campi. Niente dati carta in Odoo. -->
+  <!-- Build v3 page: Nexi SDK + method/card iframes. No card data in Odoo. -->
   <template id="build_page" name="Nexi Build Page">
     <t t-call="website.layout">
       <div class="container mt-4 mb-5" id="nexi-build-box"
@@ -33,26 +33,30 @@
            t-att-data-finalize="build_finalize_url"
            t-att-data-tok="build_tok"
            t-att-data-csrf="csrf_token"
+           t-att-data-strings="nexi_ui_json"
            t-att-data-confirm="confirm_url">
-        <h3>Paga con Nexi</h3>
-        <p class="text-muted">Paghi senza uscire dal sito. I dati carta restano su Nexi.</p>
+        <h3><t t-esc="nexi_ui['pay_with_nexi']"/></h3>
+        <p class="text-muted"><t t-esc="nexi_ui['build_intro']"/></p>
         <div id="nexi-build-methods" class="d-flex flex-column gap-2 my-3">
-          <p class="text-muted">Carico i metodi…</p>
+          <p class="text-muted"><t t-esc="nexi_ui['loading_methods']"/></p>
         </div>
         <div id="nexi-build-fields" class="d-flex flex-column gap-2 my-3"></div>
         <label class="d-flex align-items-start gap-2 my-3 d-none" id="nexi-build-privacy-wrap">
           <input type="checkbox" id="nexi-build-privacy" class="form-check-input mt-1"/>
-          <small>Ho letto l'informativa privacy Nexi (<a href="https://www.nexi.it/privacy/xpay.html" target="_blank">nexi.it/privacy/xpay</a>).</small>
+          <small><t t-esc="nexi_ui['privacy_prefix']"/><a href="https://www.nexi.it/privacy/xpay.html" target="_blank">nexi.it/privacy/xpay</a><t t-esc="nexi_ui['privacy_suffix']"/></small>
         </label>
-        <button type="button" id="nexi-build-pay" class="btn btn-primary d-none">Paga adesso</button>
+        <button type="button" id="nexi-build-pay" class="btn btn-primary d-none"><t t-esc="nexi_ui['pay_now']"/></button>
         <p id="nexi-build-error" class="alert alert-danger mt-3 d-none"></p>
-        <p class="mt-3"><a href="/shop/payment">Torna alla cassa</a></p>
+        <p class="mt-3"><a href="/shop/payment"><t t-esc="nexi_ui['back_to_checkout']"/></a></p>
       </div>
       <script type="text/javascript" t-att-src="nexi_sdk"></script>
       <script type="text/javascript">
         (function () {
           var _b = document.getElementById('nexi-build-box') || {};
           var _d = _b.dataset || {};
+          var UI = {};
+          try { UI = JSON.parse(_d.strings || '{}'); } catch (e) {}
+          function T(k, d) { return UI[k] || d; }
           var FIELDS_URL = _d.fields || '';
           var FINALIZE_URL = _d.finalize || '';
           var CONFIRM_URL = _d.confirm || '';
@@ -62,8 +66,8 @@
             var e = document.getElementById('nexi-build-error');
             e.textContent = msg; e.classList.remove('d-none');
           }
-          // Nessuna navigazione verso URL che non siano Nexi: il valore può
-          // arrivare dall'SDK o da una risposta alterata.
+          // No navigation to URLs that are not Nexi: the value can come from
+          // the SDK or from an altered response.
           function nexiUrlOk(u) {
             try {
               var x = new URL(u, window.location.href);
@@ -73,14 +77,24 @@
                 || h === 'xpaysandbox.nexigroup.com' || h.endsWith('.xpaysandbox.nexigroup.com');
             } catch (e) { return false; }
           }
+          function fieldTitle(id) {
+            // Title and name: they help screen readers and autofill to
+            // understand what the field inside the iframe is.
+            var _titles = {
+              CARD_NUMBER: T('field_number', 'Card number'),
+              EXPIRATION_DATE: T('field_expiry', 'Expiry date'),
+              SECURITY_CODE: T('field_cvv', 'Security code'),
+              CARDHOLDER_NAME: T('field_name', 'First and last name'),
+              CARDHOLDER_SURNAME: T('field_surname', 'Last name'),
+              CARDHOLDER_EMAIL: T('field_email', 'Email'),
+            };
+            return _titles[id];
+          }
           function iframeFor(f, height) {
             var i = document.createElement('iframe');
             i.src = f.src; i.scrolling = 'no';
-            // Titolo e nome: aiutano lettori di schermo e compilatori
-            // automatici a capire cos'e' il campo dentro l'iframe.
-            var _titles = {CARD_NUMBER: 'Numero carta', EXPIRATION_DATE: 'Scadenza', SECURITY_CODE: 'Codice di sicurezza', CARDHOLDER_NAME: 'Nome e cognome', CARDHOLDER_SURNAME: 'Cognome', CARDHOLDER_EMAIL: 'Email'};
-            i.setAttribute('title', 'Nexi - ' + (_titles[f.id] || f.id || 'campo carta'));
-            i.setAttribute('name', 'nexi-' + String(f.id || 'campo').toLowerCase().replace(/_/g, '-'));
+            i.setAttribute('title', 'Nexi - ' + (fieldTitle(f.id) || f.id || T('field_card', 'Card field')));
+            i.setAttribute('name', 'nexi-' + String(f.id || 'field').toLowerCase().replace(/_/g, '-'));
             i.style.border = '0'; i.style.width = '100%';
             i.style.height = height || '60px';
             i.setAttribute('data-build-id', f.id || '');
@@ -95,7 +109,7 @@
               wrap.appendChild(iframeFor(f, f.class === 'APM' ? '60px' : '70px'));
               box.appendChild(wrap);
             });
-            if (!box.children.length) fail('Nessun metodo disponibile su questo terminale.');
+            if (!box.children.length) fail(T('no_method', 'No payment method available on this terminal.'));
           }
           fetch(FIELDS_URL, {
             headers: {'Accept': 'application/json', 'X-Nexi-Token': TOK},
@@ -104,14 +118,14 @@
           }).then(function (data) {
             var fs = (data &amp;&amp; data.fieldSet) || data || {};
             showMethods(fs.fields);
-          }).catch(function () { fail('Metodi non caricati. Riprova.'); });
+          }).catch(function () { fail(T('methods_failed', 'Payment methods could not be loaded. Try again.')); });
           var build = null;
           try {
             build = new Build({
               onBuildFlowStateChange: function (evtData, workflowState) {
                 var d = evtData || {};
                 var state = d.state || workflowState || '';
-                if (d.url) { if (!nexiUrlOk(d.url)) { fail('Risposta Nexi non valida.'); return; } window.location.href = d.url; return; }
+                if (d.url) { if (!nexiUrlOk(d.url)) { fail(T('invalid_response', 'Invalid Nexi response.')); return; } window.location.href = d.url; return; }
                 if (d.fieldSet &amp;&amp; d.fieldSet.fields) {
                   var box = document.getElementById('nexi-build-fields');
                   box.innerHTML = '';
@@ -125,10 +139,10 @@
                 if (state === 'READY_FOR_PAYMENT') { finalize(); }
                 if (state === 'PAYMENT_COMPLETE') { window.location.href = CONFIRM_URL; }
               },
-              onBuildError: function (d) { fail('Errore Nexi. Riprova.'); },
-              onConfirmError: function (d) { fail('Dati non validi. Controlla e riprova.'); },
+              onBuildError: function (d) { fail(T('nexi_error', 'Nexi error. Try again.')); },
+              onConfirmError: function (d) { fail(T('invalid_data', 'Invalid data. Check and try again.')); },
             });
-          } catch (e) { fail('SDK Nexi non caricato. Riprova.'); }
+          } catch (e) { fail(T('sdk_failed', 'Nexi SDK could not be loaded. Try again.')); }
           function finalize() {
             fetch(FINALIZE_URL, {
               method: 'POST',
@@ -137,14 +151,14 @@
             }).then(function (r) { return r.json(); }
             ).then(function (res) {
               var r = (res &amp;&amp; res.result) || res || {};
-              if (r.error) { fail('Nexi: ' + r.error); return; }
-              if (r.url) { if (!nexiUrlOk(r.url)) { fail('Risposta Nexi non valida.'); return; } window.location.href = r.url; return; }
+              if (r.error) { fail(T('nexi_prefix', 'Nexi: ') + r.error); return; }
+              if (r.url) { if (!nexiUrlOk(r.url)) { fail(T('invalid_response', 'Invalid Nexi response.')); return; } window.location.href = r.url; return; }
               window.location.href = CONFIRM_URL;
-            }).catch(function () { fail('Conferma non riuscita. Riprova.'); });
+            }).catch(function () { fail(T('confirm_failed', 'Confirmation failed. Try again.')); });
           }
           document.getElementById('nexi-build-pay').addEventListener('click', function () {
             if (!document.getElementById('nexi-build-privacy').checked) {
-              fail('Spunta la privacy per continuare.'); return;
+              fail(T('privacy_required', 'Tick the privacy box to continue.')); return;
             }
             if (build) { build.confirmData(function () {}); }
           });
@@ -153,7 +167,7 @@
     </t>
   </template>
 
-  <!-- Cassa: preseleziona ultimo metodo + carte salvate DENTRO la riga Carta. -->
+  <!-- Checkout: preselect the last method + saved cards INSIDE the Card row. -->
   <record id="view_payment_form_nexi" model="ir.ui.view">
     <field name="name">payment.form.nexi.saved</field>
     <field name="model" eval="False"/>
@@ -162,12 +176,18 @@
       <xpath expr="//t[@t-set='selected_method_id']" position="attributes">
         <attribute name="t-value">not selected_token_id and (request.env['payment.transaction'].sudo().get_last_used_method_id(partner_id, payment_methods_sudo.ids) or (len(payment_methods_sudo) == 1 and payment_methods_sudo[:1].id))</attribute>
       </xpath>
+      <xpath expr="//form[@id='o_payment_form']" position="attributes">
+        <attribute name="t-att-data-nexi-strings">request.env['payment.transaction'].sudo()._nexi_ui_strings_json()</attribute>
+      </xpath>
       <xpath expr="//form[@id='o_payment_form']" position="inside">
         <script type="text/javascript">
         (function () {
           var form = document.getElementById('o_payment_form');
           if (!form || form.dataset.nexiBnpl) { return; }
           form.dataset.nexiBnpl = '1';
+          var UI = {};
+          try { UI = JSON.parse(form.dataset.nexiStrings || '{}'); } catch (e) {}
+          function T(k, d) { return UI[k] || d; }
           function show(msg) {
             var t = document.getElementById('nexi-bnpl-toast');
             if (!t) {
@@ -189,8 +209,8 @@
             var amount = parseFloat(form.dataset.amount || '0') || 0;
             return code === 'paypal_bnpl' &amp;&amp; amount &lt; 30;
           }
-          var MSG = 'PayPal Paga in 3 richiede almeno 30,00 € di ordine.';
-          // Sotto i 30 € la riga non si mostra proprio (come fa Nexi in cassa).
+          var MSG = T('bnpl_minimum', 'PayPal Pay in 3 requires an order of at least €30.00.');
+          // Below EUR 30 the row is not shown at all (as Nexi does at checkout).
           function hideBnplRow() {
             var amount = parseFloat(form.dataset.amount || '0') || 0;
             if (amount >= 30) { return; }
@@ -199,8 +219,8 @@
             if (li) { li.style.setProperty('display', 'none', 'important'); }
           }
           hideBnplRow();
-          // Il "Pay now" sta fuori dal form e Odoo chiama form.submit():
-          // l'evento submit non passa, quindi guardo il click a livello pagina.
+          // The "Pay now" button is outside the form and Odoo calls form.submit():
+          // the submit event does not fire, so the click is watched at page level.
           document.addEventListener('click', function (ev) {
             var btn = ev.target &amp;&amp; ev.target.closest ? ev.target.closest('button[type="submit"]') : null;
             if (!btn || !tooSmall()) { return; }
@@ -220,16 +240,17 @@
     </field>
   </record>
 
-  <!-- Carte salvate dentro la riga Carta, sopra "Save my payment details". -->
+  <!-- Saved cards inside the Card row, above "Save my payment details". -->
   <record id="view_payment_method_form_nexi" model="ir.ui.view">
     <field name="name">payment.method_form.nexi.saved</field>
     <field name="model" eval="False"/>
     <field name="inherit_id" ref="payment.method_form"/>
     <field name="arch" type="xml">
       <xpath expr="//div[p[@name='o_payment_secured_by']]" position="after">
+        <t t-set="nexi_ui" t-value="request.env['payment.transaction'].sudo()._nexi_ui_strings()"/>
         <t t-set="nexi_cards" t-value="pm_sudo.code == 'card' and provider_sudo.code == 'nexi' and provider_sudo.nexi_mode != 'build' and request.env['payment.transaction'].sudo().get_nexi_saved_cards(partner_id, provider_sudo.id) or []"/>
-        <div t-if="nexi_cards" id="nexi-saved-cards" t-att-data-csrf="request.csrf_token()" class="d-flex flex-column gap-1 mt-2">
-          <div class="small text-600">Le tue carte</div>
+        <div t-if="nexi_cards" id="nexi-saved-cards" t-att-data-csrf="request.csrf_token()" t-att-data-strings="request.env['payment.transaction'].sudo()._nexi_ui_strings_json()" class="d-flex flex-column gap-1 mt-2">
+          <div class="small text-600"><t t-esc="nexi_ui['your_cards']"/></div>
           <t t-foreach="nexi_cards" t-as="nc">
             <label class="d-flex align-items-center gap-2 fw-normal">
               <input type="radio" name="o_nexi_saved" class="form-check-input mt-0 nexi-saved-radio" t-att-value="nc['contract_id']"/>
@@ -238,14 +259,18 @@
           </t>
           <label class="d-flex align-items-center gap-2 fw-normal">
             <input type="radio" name="o_nexi_saved" checked="checked" value="" class="form-check-input mt-0 nexi-saved-radio"/>
-            <span><i class="fa fa-plus"/> Usa una nuova carta</span>
+            <span><i class="fa fa-plus"/> <t t-esc="nexi_ui['use_new_card']"/></span>
           </label>
           <script>
             (function () {
-              // Il form di Odoo non porta campi suoi fino al provider: la scelta
-              // la salvo in sessione e il server la rilegge quando crea l'ordine.
+              // The Odoo form does not carry its own fields down to the
+              // provider: the choice is saved in the session and the server
+              // reads it back when it creates the order.
               var box = document.getElementById('nexi-saved-cards') || {};
               var CSRF = (box.dataset || {}).csrf || '';
+              var UI = {};
+              try { UI = JSON.parse((box.dataset || {}).strings || '{}'); } catch (e) {}
+              function T(k, d) { return UI[k] || d; }
               var pending = 0;
               var seq = 0;
               var failed = false;
@@ -258,17 +283,17 @@
                   e.className = 'alert alert-danger small mt-2 mb-0';
                   if (box.appendChild) { box.appendChild(e); }
                 }
-                e.textContent = msg || 'Non riesco a salvare la carta scelta. Riprova.';
+                e.textContent = msg || T('save_card_failed', 'Could not save the selected card. Try again.');
               }
               function clearError() {
                 failed = false;
                 var e = document.getElementById('nexi-saved-cards-error');
                 if (e) { e.textContent = ''; }
               }
-              // Serve una risposta positiva vera: HTTP 2xx E risultato
-              // applicativo ok. Un 429, un CSRF scaduto o un JSON di errore
-              // NON salvano la scelta: proseguire farebbe pagare con la carta
-              // precedente rimasta in sessione.
+              // A real positive answer is needed: HTTP 2xx AND an ok
+              // application result. A 429, an expired CSRF or an error JSON do
+              // NOT save the choice: going on would pay with the previous card
+              // still in the session.
               function send(contract) {
                 var mine = ++seq;
                 pending += 1;
@@ -294,9 +319,8 @@
                 }).then(function (ok) {
                   pending -= 1;
                   if (ok === true) {
-                    // Solo l'ultima scelta inviata può togliere il blocco: una
-                    // risposta vecchia non deve cancellare l'errore di una più
-                    // recente.
+                    // Only the latest choice sent can remove the block: an old
+                    // response must not clear the error of a newer one.
                     if (mine === seq) { clearError(); }
                     return true;
                   }
@@ -304,9 +328,9 @@
                   return false;
                 });
               }
-              // Non lascio partire il pagamento mentre la scelta sta ancora
-              // viaggiando, né se l'ultimo salvataggio è fallito: in entrambi
-              // i casi la transazione leggerebbe la scelta precedente.
+              // The payment is not let through while the choice is still
+              // travelling, nor if the last save failed: in both cases the
+              // transaction would read the previous choice.
               function whenSaved(cb) {
                 var t0 = Date.now();
                 (function loop() {
@@ -315,7 +339,7 @@
                     cb(); return;
                   }
                   if (Date.now() - t0 &gt; 3000) {
-                    showError('Non riesco a salvare la carta scelta. Riprova.');
+                    showError(T('save_card_failed', 'Could not save the selected card. Try again.'));
                     return;
                   }
                   setTimeout(loop, 40);
@@ -341,14 +365,14 @@
               }, true);
               document.addEventListener('change', function (ev) {
                 if (!ev.target.classList || !ev.target.classList.contains('nexi-saved-radio')) return;
-                // Selezionare una carta sceglie anche la riga Carta.
+                // Selecting a card also selects the Card row.
                 var row = ev.target.closest('li[name=o_payment_option]');
                 var r = row ? row.querySelector('input[data-payment-method-code="card"]') : null;
                 if (r &amp;&amp; !r.checked) r.click();
                 send(ev.target.value);
               });
-              // La scelta mostrata è quella che vale, anche se non la tocchi:
-              // "Usa una nuova carta" non deve riusare la carta vecchia.
+              // The shown choice is the one that counts, even if it is not
+              // touched: "Use a new card" must not reuse the old card.
               function sendCurrent() {
                 var sel = document.querySelector('.nexi-saved-radio:checked');
                 send(sel ? sel.value : '');
@@ -365,7 +389,7 @@
     </field>
   </record>
 
-  <!-- Campi credenziali nel form provider. -->
+  <!-- Credential fields in the provider form. -->
   <record id="view_provider_nexi" model="ir.ui.view">
     <field name="name">payment.provider.nexi.form</field>
     <field name="model">payment.provider</field>
@@ -375,16 +399,16 @@
         <field name="nexi_api_key" password="True"/>
         <field name="nexi_env"/>
         <field name="nexi_mode"/>
-        <field name="nexi_payment_service" placeholder="Vuoto=tutti, es. GOOGLEPAY"/>
+        <field name="nexi_payment_service" placeholder="Empty=all, e.g. GOOGLEPAY"/>
         <field name="nexi_oneclick"/>
-        <field name="nexi_test_url" placeholder="URL test da developer.nexi.it/it/api/..."/>
-        <field name="nexi_prod_url" placeholder="URL produzione da developer.nexi.it/it/api/..."/>
-        <field name="nexi_public_base" placeholder="Vuota = web.base.url, es. https://negozio.example.com"/>
-        <button name="button_nexi_check_methods" string="Verifica metodi su Nexi" type="object" class="oe_highlight"/>
+        <field name="nexi_test_url" placeholder="Test URL from developer.nexi.it/it/api/..."/>
+        <field name="nexi_prod_url" placeholder="Production URL from developer.nexi.it/it/api/..."/>
+        <field name="nexi_public_base" placeholder="Empty = web.base.url, e.g. https://shop.example.com"/>
+        <button name="button_nexi_check_methods" string="Check methods on Nexi" type="object" class="oe_highlight"/>
         <field name="nexi_methods_checked"/>
         <field name="nexi_methods_report"/>
         <field name="nexi_method_availability_ids" readonly="1">
-          <list string="Metodi del terminale" create="false" edit="false">
+          <list string="Terminal methods" create="false" edit="false">
             <field name="method_id"/>
             <field name="disabled"/>
             <field name="checked_at"/>
@@ -394,7 +418,7 @@
       </xpath>
     </field>
   </record>
-  <!-- Spunta "nascosto" sul form metodo. -->
+  <!-- "Hidden" flag on the method form. -->
   <record id="view_payment_method_nexi" model="ir.ui.view">
     <field name="name">payment.method.nexi.form</field>
     <field name="model">payment.method</field>
@@ -405,7 +429,7 @@
       </xpath>
     </field>
   </record>
-<!-- Build: campi carta e bottoni APM DENTRO la riga, fuori dal blocco nascosto. -->
+<!-- Build: card fields and APM buttons INSIDE the row, outside the hidden block. -->
   <record id="view_payment_form_nexi_build" model="ir.ui.view">
     <field name="name">payment.form.nexi.build.rows</field>
     <field name="model" eval="False"/>
@@ -413,23 +437,23 @@
     <field name="arch" type="xml">
       <xpath expr="//t[@t-call='payment.method_form']" position="after">
         <t t-set="nexi_prov" t-value="providers_sudo.filtered(lambda p: p.code == 'nexi')[:1]"/>
-        <!-- Il provider della riga va calcolato QUI: `provider_sudo` è un t-set
-             dentro payment.method_form, non esiste in questo template (KeyError
-             a ogni caricamento della cassa). Stessa espressione di Odoo. -->
+        <!-- The row provider must be computed HERE: `provider_sudo` is a t-set
+             inside payment.method_form and does not exist in this template
+             (KeyError at every checkout load). Same expression as Odoo. -->
         <t t-set="nexi_row_prov" t-value="pm_sudo.provider_ids.filtered(lambda p: p in providers_sudo)[:1]"/>
         <t t-if="nexi_prov and nexi_prov.nexi_mode == 'build' and nexi_row_prov.code == 'nexi'">
           <t t-if="pm_sudo.code == 'card'">
             <style>
-              /* Build: ogni riga Nexi è una pillola grigia con logo + nome, senza
-                 radio. Il resto della pagina (altri provider, riepilogo, "Pay
-                 now") resta come Odoo lo disegna: le regole valgono solo sulle
-                 righe che contengono il pannello Nexi. */
+              /* Build: every Nexi row is a grey pill with logo + name, without
+                 the radio. The rest of the page (other providers, summary,
+                 "Pay now") stays as Odoo draws it: the rules only apply to the
+                 rows that contain the Nexi panel. */
               li[name=o_payment_option]:has(#nexi-inline),
               li[name=o_payment_option]:has(.nexi-apm-row){
                 cursor:pointer;align-items:flex-start !important;
                 border:1px solid transparent !important;box-sizing:border-box;
-                /* Odoo usa py-3: tra una pillola e l'altra restano ~32px.
-                   Qui il respiro è 4px sopra + 4px sotto. */
+                /* Odoo uses py-3: ~32px are left between one pill and the next.
+                   Here the breathing room is 4px above + 4px below. */
                 padding:4px 0 !important;margin:0 !important;
               }
               li[name=o_payment_option]:has(#nexi-inline) input[type="radio"],
@@ -444,24 +468,24 @@
               }
               li[name=o_payment_option]:has(#nexi-inline):hover div[for="o_payment_radio"],
               li[name=o_payment_option]:has(.nexi-apm-row):hover div[for="o_payment_radio"]{background:#eff6ff !important}
-              /* Odoo accende bordo/alone sulla riga in hover: lo spengo. */
+              /* Odoo turns on border/halo on the row on hover: turned off here. */
               li[name=o_payment_option]:has(#nexi-inline):hover,
               li[name=o_payment_option]:has(.nexi-apm-row):hover{
                 background:transparent !important;border-color:transparent !important;
                 box-shadow:none !important;outline:none !important;
               }
-              /* Il bordo di selezione aggiunge 1-2px alla riga scelta: lo riservo
-                 su tutte, così la riga selezionata non è più alta delle altre. */
+              /* The selection border adds 1-2px to the chosen row: it is
+                 reserved on all of them, so the selected row is not taller. */
               li[name=o_payment_option]:has(#nexi-inline):has(input:checked),
               li[name=o_payment_option]:has(.nexi-apm-row):has(input:checked){border-color:transparent !important}
-              /* Odoo stende la label su tutta la riga: coprirebbe i campi. */
+              /* Odoo stretches the label over the whole row: it would cover the fields. */
               li[name=o_payment_option]:has(#nexi-inline) .o_payment_option_label::before,
               li[name=o_payment_option]:has(.nexi-apm-row) .o_payment_option_label::before{display:none !important}
               li[name=o_payment_option]:has(#nexi-inline) .o_payment_option_label,
               li[name=o_payment_option]:has(.nexi-apm-row) .o_payment_option_label{font-weight:600;margin:0 !important}
               li[name=o_payment_option]:has(#nexi-inline) p[name="o_payment_secured_by"],
               li[name=o_payment_option]:has(.nexi-apm-row) p[name="o_payment_secured_by"]{display:none !important}
-              /* Il contenitore del "secured by" resta alto 8px anche vuoto. */
+              /* The "secured by" container stays 8px tall even when empty. */
               li[name=o_payment_option]:has(#nexi-inline) div.position-relative,
               li[name=o_payment_option]:has(.nexi-apm-row) div.position-relative{display:none !important}
               li[name=o_payment_option]:has(#nexi-inline) span.rounded.overflow-hidden,
@@ -474,7 +498,7 @@
                 height:24px !important;width:auto !important;max-width:52px;object-fit:contain;
                 min-height:0 !important;display:block;border-radius:6px;
               }
-              /* --- pannello carta: stile pulito, accento blu --- */
+              /* --- card panel: clean style, blue accent --- */
               #nexi-inline{
                 background:#fff;border:1px solid #e5eaf3;border-radius:14px;
                 box-shadow:0 1px 2px rgba(16,24,40,.06),0 10px 24px rgba(16,24,40,.07);
@@ -496,31 +520,37 @@
               }
               #nexi-inline-pay:hover{background:#1d4ed8}
               #nexi-inline-pay:disabled{background:#9db8f5}
-              /* Embedded: il "Pay now" della colonna riepilogo sarebbe un secondo
-                 bottone che non serve (si paga dal pannello carta). Lo nasconde
-                 il JS, e solo quando è selezionata una riga Nexi: lo stesso
-                 bottone serve agli altri provider. */
+              /* Embedded: the "Pay now" of the summary column would be a second
+                 button that is not needed (the payment happens in the card
+                 panel). The JS hides it, and only when a Nexi row is selected:
+                 the same button is used by the other providers. */
             </style>
-            <div id="nexi-inline" class="w-100 d-none" t-att-data-csrf="request.csrf_token()">
+            <div id="nexi-inline" class="w-100 d-none" t-att-data-csrf="request.csrf_token()" t-att-data-strings="request.env['payment.transaction'].sudo()._nexi_ui_strings_json()">
               <div id="nexi-inline-fields">
-                <p class="small text-muted">Carico i campi carta…</p>
+                <p class="small text-muted"><t t-esc="nexi_ui['loading_fields']"/></p>
               </div>
               <label class="nexi-privacy d-none" id="nexi-inline-privacy-wrap">
                 <input type="checkbox" id="nexi-inline-privacy" class="form-check-input mt-0"/>
-                <small>Ho letto l'informativa privacy Nexi (<a href="https://www.nexi.it/privacy/xpay.html" target="_blank">nexi.it/privacy/xpay</a>).</small>
+                <small><t t-esc="nexi_ui['privacy_prefix']"/><a href="https://www.nexi.it/privacy/xpay.html" target="_blank">nexi.it/privacy/xpay</a><t t-esc="nexi_ui['privacy_suffix']"/></small>
               </label>
-              <button type="button" id="nexi-inline-pay" style="display:none;">Pay now</button>
+              <button type="button" id="nexi-inline-pay" style="display:none;"><t t-esc="nexi_ui['pay_now']"/></button>
               <p id="nexi-inline-error" class="alert alert-danger mt-2 d-none"></p>
             </div>
             <script>
             (function () {
               var done = false;
+              var UI = {};
+              try {
+                var _box = document.getElementById('nexi-inline');
+                UI = JSON.parse((_box &amp;&amp; _box.dataset &amp;&amp; _box.dataset.strings) || '{}');
+              } catch (e) {}
+              function T(k, d) { return UI[k] || d; }
               function nexiCsrf() {
                 var b = document.getElementById('nexi-inline');
                 return (b &amp;&amp; b.dataset.csrf) || '';
               }
-              // I loghi dei metodi nascono lazy dentro un contenitore stretto e
-              // restano 0x0: forzo il caricamento e tolgo l'altezza 1px.
+              // The method logos are created lazily inside a narrow container and
+              // stay 0x0: the load is forced and the 1px height removed.
               document.querySelectorAll('li[name=o_payment_option] img').forEach(function (im) {
                 im.setAttribute('loading', 'eager');
                 im.removeAttribute('style');
@@ -552,15 +582,15 @@
                 var b = submitBtn();
                 if (b) b.classList.toggle('d-none', !show);
               }
-              // La riga che contiene il nostro pannello (o il marcatore APM).
+              // The row that contains our panel (or the APM marker).
               function nexiRow() {
                 var b = document.getElementById('nexi-inline');
                 return b ? b.closest('li[name=o_payment_option]') : null;
               }
-              // In embedded il "Pay now" del riepilogo è un secondo bottone
-              // inutile (si paga dal pannello Nexi). Lo nascondo anche prima
-              // della scelta: altrimenti compare subito grigio. Con un altro
-              // provider selezionato deve invece restare visibile.
+              // In embedded mode the "Pay now" of the summary is a second,
+              // useless button (the payment happens in the Nexi panel). It is
+              // hidden even before the choice: otherwise it shows up grey right
+              // away. With another provider selected it must stay visible instead.
               function syncSubmit() {
                 var sel = document.querySelector('input[name="o_payment_radio"]:checked');
                 if (!sel) { showSubmit(false); return; }
@@ -600,8 +630,8 @@
                 var e = document.getElementById('nexi-inline-error');
                 if (e) { e.textContent = msg; e.classList.remove('d-none'); }
               }
-              // Nessuna navigazione verso URL che non siano Nexi: il valore può
-              // arrivare dall'SDK o da una risposta alterata.
+              // No navigation to URLs that are not Nexi: the value can come from
+              // the SDK or from an altered response.
               function nexiUrlOk(u) {
                 try {
                   var x = new URL(u, window.location.href);
@@ -611,14 +641,24 @@
                     || h === 'xpaysandbox.nexigroup.com' || h.endsWith('.xpaysandbox.nexigroup.com');
                 } catch (e) { return false; }
               }
+              function fieldTitle(id) {
+                // Title and name: they help screen readers and autofill to
+                // understand what the field inside the iframe is.
+                var _titles = {
+                  CARD_NUMBER: T('field_number', 'Card number'),
+                  EXPIRATION_DATE: T('field_expiry', 'Expiry date'),
+                  SECURITY_CODE: T('field_cvv', 'Security code'),
+                  CARDHOLDER_NAME: T('field_name', 'First and last name'),
+                  CARDHOLDER_SURNAME: T('field_surname', 'Last name'),
+                  CARDHOLDER_EMAIL: T('field_email', 'Email'),
+                };
+                return _titles[id];
+              }
               function iframeFor(f, height) {
                 var i = document.createElement('iframe');
                 i.src = f.src; i.scrolling = 'no';
-            // Titolo e nome: aiutano lettori di schermo e compilatori
-            // automatici a capire cos'e' il campo dentro l'iframe.
-            var _titles = {CARD_NUMBER: 'Numero carta', EXPIRATION_DATE: 'Scadenza', SECURITY_CODE: 'Codice di sicurezza', CARDHOLDER_NAME: 'Nome e cognome', CARDHOLDER_SURNAME: 'Cognome', CARDHOLDER_EMAIL: 'Email'};
-            i.setAttribute('title', 'Nexi - ' + (_titles[f.id] || f.id || 'campo carta'));
-            i.setAttribute('name', 'nexi-' + String(f.id || 'campo').toLowerCase().replace(/_/g, '-'));
+                i.setAttribute('title', 'Nexi - ' + (fieldTitle(f.id) || f.id || T('field_card', 'Card field')));
+                i.setAttribute('name', 'nexi-' + String(f.id || 'field').toLowerCase().replace(/_/g, '-'));
                 i.style.border = '0'; i.style.width = '100%';
                 i.style.height = height || '60px';
                 return i;
@@ -628,11 +668,11 @@
                 var s = document.createElement('script');
                 if (!nexiUrlOk(src)) { return; }
                 s.src = src; s.onload = cb;
-                s.onerror = function () { fail('SDK Nexi non caricato. Riprova.'); };
+                s.onerror = function () { fail(T('sdk_failed', 'Nexi SDK could not be loaded. Try again.')); };
                 document.head.appendChild(s);
               }
-              // La sessione Nexi invecchia: dopo 10 minuti i campi muoiono
-              // (errori strani anche con dati giusti). Meglio rifarli.
+              // The Nexi session gets old: after 10 minutes the fields die
+              // (strange errors even with the right data). Better to redo them.
               function sessionStale() {
                 var box = document.getElementById('nexi-inline');
                 var t = box &amp;&amp; parseInt(box.dataset.preparedAt || '0', 10);
@@ -647,8 +687,8 @@
                 if (!box || done) { return; }
                 done = true;
                 if (show) box.classList.remove('d-none');
-                // Solo la casella "salva carta" della NOSTRA riga: quella degli
-                // altri provider non va toccata.
+                // Only the "save card" box of OUR row: the one of the other
+                // providers must not be touched.
                 var myRow = nexiRow();
                 var tok = myRow ? myRow.querySelector('input[name="o_payment_tokenize_checkbox"]') : null;
                 var tokBox = tok ? tok.closest('div[name="o_payment_tokenize_container"], div.o-checkbox') : null;
@@ -660,7 +700,7 @@
                 }).then(function (r) { return r.json(); }
                 ).then(function (res) {
                   var r = (res &amp;&amp; res.result) || res || {};
-                  if (r.error) { done = false; fail(r.error || 'Form non caricato. Riprova.'); return; }
+                  if (r.error) { done = false; fail(r.error || T('form_failed', 'Form could not be loaded. Try again.')); return; }
                   box.dataset.preparedAt = String(Date.now());
                   box.dataset.finalize = r.finalize_url;
                   box.dataset.tok = r.tok || '';
@@ -668,12 +708,12 @@
                   var fb = document.getElementById('nexi-inline-fields');
                   fb.innerHTML = '';
                   var LABELS = {
-                    CARD_NUMBER: 'Numero carta',
-                    EXPIRATION_DATE: 'Scadenza',
-                    SECURITY_CODE: 'Codice di sicurezza',
-                    CARDHOLDER_NAME: 'Nome e cognome',
-                    CARDHOLDER_SURNAME: 'Cognome',
-                    CARDHOLDER_EMAIL: 'Email',
+                    CARD_NUMBER: T('field_number', 'Card number'),
+                    EXPIRATION_DATE: T('field_expiry', 'Expiry date'),
+                    SECURITY_CODE: T('field_cvv', 'Security code'),
+                    CARDHOLDER_NAME: T('field_name', 'First and last name'),
+                    CARDHOLDER_SURNAME: T('field_surname', 'Last name'),
+                    CARDHOLDER_EMAIL: T('field_email', 'Email'),
                   };
                   (r.fields || []).forEach(function (f) {
                     if (!f || !f.src || !nexiUrlOk(f.src)) return;
@@ -694,14 +734,14 @@
                     document.getElementById('nexi-inline-privacy-wrap').classList.remove('d-none');
                     document.getElementById('nexi-inline-pay').style.display = '';
                   } else {
-                    done = false; fail('Nessun campo carta disponibile.'); return;
+                    done = false; fail(T('no_card_field', 'No card field available.')); return;
                   }
                   hideUnavailable(r.buttons);
                   loadSdk(r.sdk, initBuild);
-                }).catch(function () { done = false; fail('Form non caricato. Riprova.'); });
+                }).catch(function () { done = false; fail(T('form_failed', 'Form could not be loaded. Try again.')); });
               }
               var BTNMAP = {googlepay: 'GOOGLEPAY', applepay: 'APPLEPAY', bancomatpay: 'BANCOMATPAY', mybank: 'MYBANK', paypal: 'PAYPAL', paypal_bnpl: 'PAYPAL_PAGAIN3'};
-              // Nascondo le righe il cui metodo Nexi non offre davvero.
+              // Hide the rows whose Nexi method is not really offered.
               function hideUnavailable(buttons) {
                 var ids = {};
                 (buttons || []).forEach(function (f) { if (f &amp;&amp; f.id) ids[f.id] = 1; });
@@ -719,7 +759,7 @@
                       var d = evtData || {};
                       var state = d.state || workflowState || '';
                       var box = document.getElementById('nexi-inline');
-                      if (d.url) { if (!nexiUrlOk(d.url)) { fail('Risposta Nexi non valida.'); return; } window.location.href = d.url; return; }
+                      if (d.url) { if (!nexiUrlOk(d.url)) { fail(T('invalid_response', 'Invalid Nexi response.')); return; } window.location.href = d.url; return; }
                       if (state === 'READY_FOR_PAYMENT') { finalize(box); }
                       if (state === 'PAYMENT_COMPLETE') { window.location.href = box.dataset.confirm; }
                     },
@@ -735,34 +775,34 @@
                       } catch (e2) {}
                       var info = d || {};
                       if (info.id) {
-                        // Errore di un singolo campo mentre si scrive: lo mostro
-                        // sotto quel campo, senza bloccare tutto il pagamento.
-                        fieldError(info.id, info.errorMessage || 'Controlla questo campo.');
+                        // Error of a single field while typing: it is shown
+                        // under that field, without blocking the whole payment.
+                        fieldError(info.id, info.errorMessage || T('field_invalid', 'Check this field.'));
                         return;
                       }
-                      fail('Errore Nexi. Riprova.');
+                      fail(T('nexi_error', 'Nexi error. Try again.'));
                     },
                     onConfirmError: function () {
                       if (sessionStale()) {
                         refreshSession();
-                        fail('Sessione scaduta: campi rinnovati, ricompila e premi Pay now.');
+                        fail(T('session_stale', 'Session expired: fields refreshed, fill them in again and press Pay now.'));
                         return;
                       }
-                      fail('Dati non validi. Controlla e riprova.');
+                      fail(T('invalid_data', 'Invalid data. Check and try again.'));
                     },
                   });
-                } catch (e) { fail('SDK Nexi non caricato. Riprova.'); return; }
+                } catch (e) { fail(T('sdk_failed', 'Nexi SDK could not be loaded. Try again.')); return; }
                 var payBtn = document.getElementById('nexi-inline-pay');
                 if (payBtn &amp;&amp; !payBtn.dataset.hook) {
                   payBtn.dataset.hook = '1';
                   payBtn.addEventListener('click', function (ev) {
                     ev.preventDefault();
                     if (!document.getElementById('nexi-inline-privacy').checked) {
-                      fail('Spunta la privacy per continuare.'); return;
+                      fail(T('privacy_required', 'Tick the privacy box to continue.')); return;
                     }
                     if (sessionStale()) {
                       refreshSession();
-                      fail('Sessione scaduta: campi rinnovati, ricompila e premi Pay now.');
+                      fail(T('session_stale', 'Session expired: fields refreshed, fill them in again and press Pay now.'));
                       return;
                     }
                     if (window.__nexiBuild) { window.__nexiBuild.confirmData(function () {}); }
@@ -779,11 +819,11 @@
                       ev.preventDefault();
                       ev.stopPropagation();
                       if (!document.getElementById('nexi-inline-privacy').checked) {
-                        fail('Spunta la privacy per continuare.'); return;
+                        fail(T('privacy_required', 'Tick the privacy box to continue.')); return;
                       }
                       if (sessionStale()) {
                         refreshSession();
-                        fail('Sessione scaduta: campi rinnovati, ricompila e premi Pay now.');
+                        fail(T('session_stale', 'Session expired: fields refreshed, fill them in again and press Pay now.'));
                         return;
                       }
                       window.__nexiBuild.confirmData(function () {});
@@ -799,8 +839,8 @@
                   wrap = document.querySelector('[data-nexi-field="' + esc + '"]');
                 } catch (e) {}
                 if (!wrap) {
-                  // Fallback senza selettore costruito: un id ostile non deve
-                  // poter bloccare la UI con un SyntaxError.
+                  // Fallback without a built selector: a hostile id must not be
+                  // able to block the UI with a SyntaxError.
                   var all = document.querySelectorAll('[data-nexi-field]');
                   for (var i = 0; i &lt; all.length; i += 1) {
                     if (all[i].getAttribute('data-nexi-field') === id) { wrap = all[i]; break; }
@@ -830,16 +870,16 @@
                 }).then(function (r) { return r.json(); }
                 ).then(function (res) {
                   var r = (res &amp;&amp; res.result) || res || {};
-                  if (r.error) { fail('Nexi: ' + r.error); return; }
-                  if (r.url) { if (!nexiUrlOk(r.url)) { fail('Risposta Nexi non valida.'); return; } window.location.href = r.url; return; }
+                  if (r.error) { fail(T('nexi_prefix', 'Nexi: ') + r.error); return; }
+                  if (r.url) { if (!nexiUrlOk(r.url)) { fail(T('invalid_response', 'Invalid Nexi response.')); return; } window.location.href = r.url; return; }
                   window.location.href = box.dataset.confirm;
-                }).catch(function () { fail('Conferma non riuscita. Riprova.'); });
+                }).catch(function () { fail(T('confirm_failed', 'Confirmation failed. Try again.')); });
               }
               document.addEventListener('click', function (ev) {
                 var t = ev.target;
-                // Odoo manda due click (label + input): ne gestiamo uno solo.
+                // Odoo sends two clicks (label + input): only one is handled.
                 if (!t || t.tagName === 'INPUT') return;
-                // Solo il bottone Carta apre/chiude: il resto della riga e i campi no.
+                // Only the Card button opens/closes: the rest of the row and the fields do not.
                 var pill = t &amp;&amp; t.closest ? t.closest('div[for="o_payment_radio"]') : null;
                 if (!pill) return;
                 var row = pill.closest('li[name=o_payment_option]');
@@ -848,8 +888,8 @@
                 if (b &amp;&amp; !b.classList.contains('d-none')) { b.classList.add('d-none'); return; }
                 if (b) {
                   b.classList.remove('d-none');
-                  // Sessione vecchia = campi morti: li rifaccio subito,
-                  // prima che il cliente ci scriva dentro.
+                  // Old session = dead fields: they are redone right away,
+                  // before the customer types in them.
                   if (!b.querySelector('iframe') || sessionStale()) { refreshSession(); }
                 }
                 var r = row.querySelector('input[data-payment-method-code="card"]');
@@ -864,9 +904,9 @@
                 if (!apm || apm.dataset.busy) return;
                 var code = apm.dataset.methodCode;
                 if (!code) {
-                  // Controllo PRIMA di occupare il flag: prima restava
-                  // inchiodato e il metodo non ripartiva più.
-                  toast('Metodo non disponibile. Riprova.');
+                  // Check BEFORE taking the flag: before, it stayed stuck and
+                  // the method never started again.
+                  toast(T('method_unavailable', 'Method not available. Try again.'));
                   return;
                 }
                 apm.dataset.busy = '1';
@@ -884,7 +924,7 @@
                   if (r.url) {
                     if (!nexiUrlOk(r.url)) {
                       release();
-                      toast('Risposta Nexi non valida.');
+                      toast(T('invalid_response', 'Invalid Nexi response.'));
                       return;
                     }
                     window.location.href = r.url;
@@ -892,16 +932,16 @@
                   }
                   release();
                   if (r.hide) { row.style.setProperty('display', 'none', 'important'); }
-                  toast(r.error || 'Metodo non disponibile. Riprova.');
+                  toast(r.error || T('method_unavailable', 'Method not available. Try again.'));
                 }).catch(function () {
                   release();
-                  toast('Metodo non disponibile. Riprova.');
+                  toast(T('method_unavailable', 'Method not available. Try again.'));
                 });
               });
-              // Nessun prepare automatico: aprire il checkout non deve
-              // creare ordini Nexi né mandare nome/email al gateway. La
-              // sessione Build nasce solo quando il cliente sceglie Nexi
-              // (click sulla riga Carta o su un bottone APM).
+              // No automatic prepare: opening the checkout must not create Nexi
+              // orders nor send name/email to the gateway. The Build session is
+              // born only when the customer chooses Nexi (click on the Card row
+              // or on an APM button).
             })();
           </script>
           </t>

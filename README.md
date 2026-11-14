@@ -38,6 +38,7 @@ Selling online with Odoo on an Italian Nexi terminal means choosing between send
 - **Per-terminal method check**: the **Check methods on Nexi** button tests the terminal and stores the result **for that provider only** — two Nexi providers in the same database can offer different methods. A timeout or broken configuration never hides a method, only an explicit refusal from Nexi (*service not enabled*) does. The `Hidden on every Nexi terminal` flag on the payment method hides it everywhere, by hand.
 - **OneClick saved cards** (Hosted Page): creates and reuses a Nexi contract per terminal. At checkout the saved cards are listed, the card the customer picks wins over automatic reuse, and *Use a new card* really starts a new card without sending a stored contract.
 - **No card data in Odoo**: only the masked PAN (`**** 1234`) is stored, never the full number or the CVV.
+- **Shopper texts follow the shop language**: the code carries English msgids and `i18n/it.po` ships the Italian text, so an Italian shop shows Italian and an English shop shows English. Other languages fall back to English.
 - **No refunds, no manual capture**: the module only reads `AUTHORIZATION` and `CAPTURE`, so a refund done from the Nexi back office leaves the transaction `done` — record it by hand in Odoo.
 
 ## Install
@@ -72,7 +73,7 @@ Notes:
 - Odoo 18 with the `payment`, `website` and `website_sale` modules (the module's `depends`).
 - Python package `requests` (external dependency).
 - A Nexi XPay Web terminal with its `X-Api-Key` (the test keys are the ones published by Nexi in the XPay documentation — never commit them to the repository).
-- Currency **EUR** (Nexi rejects the others).
+- Currency **EUR**: Nexi rejects the others, and the currency of the **checkout** (i.e. the website pricelist) must be EUR. The company currency can be anything: a USD company that sells in EUR works, a USD-priced website does not (see [Currency](#currency)).
 - A **public URL** for Embedded mode: Nexi does not accept `localhost`.
 
 ## Configuration
@@ -82,13 +83,22 @@ Notes:
 | `X-Api-Key` | XPay Web terminal key |
 | Environment | Test or Production |
 | Nexi URL (test/production) | Endpoint `…/psp/api/v1/orders/hpp` |
-| Mode | **Hosted Page** or **Embedded (Build v3)** |
+| Checkout mode | **Hosted Page** or **Embedded (Build v3)** |
 | Shop public base | Empty = `web.base.url`. Enter the public domain (needed for return URLs and for Build) |
 | Preselected method | Empty = all, or e.g. `GOOGLEPAY` |
 | OneClick | Creates and reuses a contract for saved cards (Hosted Page) |
 | Check methods on Nexi | Tests the terminal and stores the result **for this provider only** |
 
 Cards are per terminal: a contract created on one Nexi provider is not offered on another one.
+
+### Currency
+
+Nexi only accepts **EUR**, so the module declares EUR as its only supported currency (`_get_supported_currencies`). Odoo picks the currency of a payment from the **order**, which takes it from the **pricelist** of the website: that is the currency that has to be EUR.
+
+- Company currency USD + website pricelist EUR → works: the order is in EUR and Nexi is offered.
+- Website pricelist USD (or any non-EUR pricelist) → Nexi is **not offered at checkout at all**. Odoo filters the providers by currency, so there is no error to read: the row simply is not there. Forcing a transaction in another currency (scripts, direct calls) stops with `Nexi supports EUR only.` — the module never sends a non-EUR amount to Nexi.
+
+There is no automatic conversion: a USD order is not converted to EUR at payment time. To take Nexi payments, set a EUR pricelist on the website (*Website → Configuration → Settings → Shop → Pricelist*, or the pricelist on the site record): the prices are then computed in EUR like for any other currency.
 
 Behind a reverse proxy or load balancer, Odoo must see the real client address: set `proxy_mode = True` in `odoo.conf` and let the proxy sanitize `X-Forwarded-For` (Odoo 18 trusts the first entry with no allowlist). Otherwise all Nexi notifications share one rate-limit bucket per worker and a busy shop can starve the others with legitimate `429`s.
 
@@ -102,6 +112,7 @@ payment_nexi/
 ├── __manifest__.py                 # version 1.4.10, depends, data files
 ├── controllers/main.py             # Nexi return + Build routes
 ├── data/payment_method_data.xml    # payment methods (Nexi-only codes; shared ones come from the core)
+├── i18n/it.po                      # Italian translation (English msgids in the code)
 ├── models/
 │   ├── payment_provider.py         # fields, API calls, URLs
 │   ├── payment_method_nexi.py      # methods visible at checkout
