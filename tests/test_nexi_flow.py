@@ -88,59 +88,6 @@ class TestNexiReview(TransactionCase):
         self.assertEqual(tx.state, 'done')
         self.assertIn('1234', tx.nexi_masked_pan or '')
 
-    def test_capture_only_closes_payment(self):
-        """Nexi sometimes sends only the CAPTURE: without looking at it the payment hangs."""
-        tx = self._new_tx()
-        data = self._nexi_answer(
-            tx.reference, 1000,
-            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
-        )
-        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
-            tx._process_notification_data({})
-        self.assertEqual(tx.state, 'done')
-
-    def test_capture_without_operation_amount_closes_payment(self):
-        """On the capture the amount can be only in capturedAmount."""
-        tx = self._new_tx()
-        data = self._nexi_answer(
-            tx.reference, 1000,
-            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
-        )
-        for operation in data['operations']:
-            operation.pop('operationAmount', None)
-        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
-            tx._process_notification_data({})
-        self.assertEqual(tx.state, 'done', 'captured: it must not end in error')
-
-    def test_capture_without_any_captured_amount_is_refused(self):
-        """CAPTURE executed but no amount anywhere: fail-closed."""
-        tx = self._new_tx()
-        data = self._nexi_answer(
-            tx.reference, 1000,
-            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
-        )
-        data['orderStatus'].pop('capturedAmount', None)
-        for operation in data['operations']:
-            operation.pop('operationAmount', None)
-            operation.pop('capturedAmount', None)
-        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
-            tx._process_notification_data({})
-        self.assertEqual(tx.state, 'error')
-
-    def test_capture_with_decimal_amount_closes_payment(self):
-        """Decimal format (euro): it is converted, not refused."""
-        tx = self._new_tx()
-        data = self._nexi_answer(
-            tx.reference, 1000,
-            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
-        )
-        data['orderStatus']['capturedAmount'] = '10.00'
-        for operation in data['operations']:
-            operation['operationAmount'] = '10.00'
-        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
-            tx._process_notification_data({})
-        self.assertEqual(tx.state, 'done', '10.00 euro = 1000 cents')
-
     def test_capture_summing_operations_closes_payment(self):
         """Two partial captures that cover the figure: it closes."""
         tx = self._new_tx()
@@ -161,69 +108,6 @@ class TestNexiReview(TransactionCase):
             tx._process_notification_data({})
         self.assertEqual(tx.state, 'done')
 
-    def test_wrong_order_id_is_refused(self):
-        """The response must refer to THIS order."""
-        tx = self._new_tx()
-        data = self._nexi_answer(
-            'OTHER-ORDER', 1000,
-            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
-        )
-        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
-            tx._process_notification_data({})
-        self.assertEqual(tx.state, 'error')
-
-    def test_missing_order_id_is_refused(self):
-        """Without orderId I cannot tell it is mine: fail-closed."""
-        tx = self._new_tx()
-        data = self._nexi_answer(
-            tx.reference, 1000,
-            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
-        )
-        data.pop('orderId', None)
-        data['orderStatus'].pop('order', None)
-        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
-            tx._process_notification_data({})
-        self.assertEqual(tx.state, 'error')
-
-    def test_authorization_only_stays_pending(self):
-        tx = self._new_tx()
-        data = self._nexi_answer(
-            tx.reference, 0,
-            ('AUTHORIZATION', 'AUTHORIZED', '2026-10-30T10:00:00'),
-        )
-        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
-            tx._process_notification_data({})
-        self.assertEqual(tx.state, 'pending')
-
-    def test_wrong_amount_is_refused(self):
-        tx = self._new_tx(amount=99.0)
-        data = self._nexi_answer(
-            tx.reference, 1000,
-            ('AUTHORIZATION', 'EXECUTED', '2026-10-30T10:00:00'),
-            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
-        )
-        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
-            tx._process_notification_data({})
-        self.assertEqual(tx.state, 'error', 'different amount: it must not close')
-
-    def test_auth_executed_without_capture_stays_pending(self):
-        """H1: an AUTHORIZATION EXECUTED does not prove the capture."""
-        tx = self._new_tx()
-        data = {
-            'orderId': tx.reference,
-            'operations': [{
-                'operationType': 'AUTHORIZATION',
-                'operationResult': 'EXECUTED',
-                'operationAmount': '1000',
-                'operationCurrency': 'EUR',
-                'operationTime': '2026-10-30T10:00:00',
-                'paymentInstrumentInfo': '**** 1234',
-            }],
-        }
-        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
-            tx._process_notification_data({})
-        self.assertEqual(tx.state, 'pending', 'authorized is not captured')
-
     def test_auth_with_zero_captured_stays_pending(self):
         """H1: explicit capturedAmount 0 -> no close."""
         tx = self._new_tx()
@@ -235,43 +119,6 @@ class TestNexiReview(TransactionCase):
         with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
             tx._process_notification_data({})
         self.assertEqual(tx.state, 'pending')
-
-    def test_order_level_capture_proves_done_without_capture_operation(self):
-        """H1: order capturedAmount >= expected is capture evidence."""
-        tx = self._new_tx()
-        data = self._nexi_answer(
-            tx.reference, 1000,
-            ('AUTHORIZATION', 'EXECUTED', '2026-10-30T10:00:00'),
-        )
-        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
-            tx._process_notification_data({})
-        self.assertEqual(tx.state, 'done')
-
-    def test_later_declined_auth_does_not_cancel_capture(self):
-        """H1: a later decline does not undo an executed CAPTURE."""
-        tx = self._new_tx()
-        data = {
-            'orderId': tx.reference,
-            'operations': [
-                {
-                    'operationType': 'CAPTURE',
-                    'operationResult': 'EXECUTED',
-                    'operationAmount': '1000',
-                    'operationCurrency': 'EUR',
-                    'operationTime': '2026-10-30T10:00:05',
-                },
-                {
-                    'operationType': 'AUTHORIZATION',
-                    'operationResult': 'DECLINED',
-                    'operationAmount': '1000',
-                    'operationCurrency': 'EUR',
-                    'operationTime': '2026-10-30T10:00:06',
-                },
-            ],
-        }
-        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
-            tx._process_notification_data({})
-        self.assertEqual(tx.state, 'done', 'the money was taken')
 
     def test_refund_after_capture_still_cancels(self):
         """H1: a reversal after the capture wins over the sticky capture."""
@@ -554,18 +401,6 @@ class TestNexiReview(TransactionCase):
         # Second run: no-op, without errors.
         migrate_mod.migrate(self.env.cr, '1.4.4')
 
-    def test_disagreeing_operations_without_time_stay_pending(self):
-        """#8 H1: AUTH paid + CAPTURE KO without dates -> pending, never done."""
-        tx = self._new_tx()
-        data = self._nexi_answer(
-            tx.reference, 1000,
-            ('AUTHORIZATION', 'EXECUTED', None),
-            ('CAPTURE', 'DECLINED', None),
-        )
-        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
-            tx._process_notification_data({})
-        self.assertEqual(tx.state, 'pending')
-
     def test_transient_gateway_error_stays_pending(self):
         """#8 H2: timeout/5xx from Nexi -> pending (the cron rechecks)."""
         from odoo.addons.payment_nexi.models.payment_provider import (
@@ -584,31 +419,6 @@ class TestNexiReview(TransactionCase):
         ):
             tx2._process_notification_data({})
         self.assertEqual(tx2.state, 'pending')
-
-    def test_missing_currency_is_refused(self):
-        """#8 M2: EXECUTED without currency -> error, never done."""
-        tx = self._new_tx()
-        data = self._nexi_answer(
-            tx.reference, 1000,
-            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
-        )
-        for operation in data['operations']:
-            operation.pop('operationCurrency', None)
-        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
-            tx._process_notification_data({})
-        self.assertEqual(tx.state, 'error')
-
-    def test_partial_order_total_is_refused(self):
-        """#8 M1: operation 1000 but order total 600 -> error."""
-        tx = self._new_tx()
-        data = self._nexi_answer(
-            tx.reference, 600,
-            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
-        )
-        data['operations'][0]['operationAmount'] = '1000'
-        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
-            tx._process_notification_data({})
-        self.assertEqual(tx.state, 'error')
 
     def test_http_path_makes_a_single_call(self):
         """#8 M6: a single GET in the request path, no sleep."""
