@@ -5,8 +5,7 @@ import logging
 import re
 import secrets
 import time
-from datetime import datetime, timedelta
-from decimal import Decimal, InvalidOperation
+from datetime import timedelta
 from urllib.parse import parse_qsl, quote, urlencode, urlparse
 
 from odoo import _, api, fields, models
@@ -23,14 +22,13 @@ from .payment_provider import (
 
 _logger = logging.getLogger(__name__)
 
-# Nexi outcomes. EXECUTED = paid (automatic). AUTHORIZED = only blocked.
-OK_RESULTS = {'EXECUTED'}
-AUTH_RESULTS = {'AUTHORIZED'}
-# THREEDS_VALIDATED = 3DS ok but payment still running: wait.
-WAIT_RESULTS = {'PENDING', 'AUTH-REQUEST', 'AUTHORIZED_PENDING', 'THREEDS_VALIDATED'}
-# VOIDED = reversal: nothing captured. REFUNDED = refund: nothing captured (v1 without refunds).
-KO_RESULTS = {'CANCELED', 'THREEDS_FAILED', 'DENIED', 'DENIED_BY_RISK', 'ERROR',
-              'DECLINED', 'FAILED', 'VOIDED', 'REFUNDED'}
+# The outcome policy lives in its own module, without Odoo: what a Nexi answer
+# means is decided there, applied here. See GLOSSARY.md ("Verdict").
+from .nexi_verdict import (
+    ALREADY_CAPTURED, AMOUNT_MISMATCH, AUTHORIZED, CANCEL, CAPTURE_INCOMPLETE,
+    CAPTURE_WAIVED, DONE, INVALID_CURRENCY, INVALID_ORDER, PENDING,
+    capture_total, to_cents, verdict,
+)
 
 # Odoo method -> Nexi paymentService. Empty = all. Values from the Nexi table.
 METHOD_SERVICE = {
@@ -52,124 +50,6 @@ def _nexi_short(masked):
 
 
 REF_RE = re.compile(r'^[A-Za-z0-9_-]{4,64}$')
-
-
-def to_cents(amount):
-    """Euro -> integer cents. Example: 12.34 -> 1234."""
-    try:
-        value = Decimal(str(amount))
-        if not value.is_finite():
-            return 0
-        return int((value * 100).to_integral_value())
-    except (InvalidOperation, ValueError, TypeError, OverflowError):
-        return 0
-
-
-def is_paid(operation_result):
-    return operation_result in OK_RESULTS
-
-
-def _parse_cents(value):
-    """Integer cents from a Nexi response.
-
-    XPay writes the amounts in integer cents (``"1000"`` = EUR 10.00), but some
-    flows send a decimal (``"10.00"``): the text with a dot is read as euro and
-    converted with Decimal (never float), otherwise a real capture would end up
-    in error. ``None`` if it is not a number.
-    """
-    try:
-        text = str(value).strip()
-        d = Decimal(text)
-    except (InvalidOperation, ValueError, TypeError, OverflowError):
-        return None
-    # Decimal accepts 'Infinity' and 'NaN': they are not amounts, and int() on
-    # Infinity would raise OverflowError up to a 500.
-    if not d.is_finite():
-        return None
-    if '.' in text or 'e' in text.lower():
-        try:
-            return int((d * 100).to_integral_value())
-        except (InvalidOperation, ValueError, TypeError, OverflowError):
-            return None
-    try:
-        if d != d.to_integral_value():
-            return None
-        return int(d)
-    except (InvalidOperation, ValueError, TypeError, OverflowError):
-        return None
-
-def _nexi_capture_total(data, op, currency=None):
-    """How much Nexi says it captured, in cents.
-
-    First the order-level total (``orderStatus.capturedAmount``): it is the only
-    one that says how much was really taken. The single-operation figures count
-    only when the total is missing; as a last resort the captures in
-    ``operations[]`` are summed. ``None`` if there is no number anywhere. With
-    ``currency`` given, items in another currency are not summed (never mix
-    currencies).
-    """
-    data = data if isinstance(data, dict) else {}
-    status = data.get('orderStatus')
-    status = status if isinstance(status, dict) else {}
-    cap = status.get('capturedAmount')
-    if cap not in (None, ''):
-        got = _parse_cents(cap)
-        if got is not None:
-            return got
-    op = op if isinstance(op, dict) else {}
-    # Only a CAPTURE carries a capture: the amount of an AUTHORIZATION is an
-    # authorization, not money taken.
-    if str(op.get('operationType') or '').upper() == 'CAPTURE':
-        for raw in (op.get('operationAmount'), op.get('capturedAmount')):
-            got = _parse_cents(raw) if raw not in (None, '') else None
-            if got is not None:
-                return got
-    total = 0
-    found = False
-    operations = data.get('operations')
-    for item in (operations if isinstance(operations, list) else []):
-        if not isinstance(item, dict):
-            continue
-        if str(item.get('operationType') or '').upper() != 'CAPTURE':
-            continue
-        if not is_paid(str(item.get('operationResult') or '').upper()):
-            continue
-        if currency and (item.get('operationCurrency') or '') != currency:
-            continue
-        got = _parse_cents(item.get('operationAmount'))
-        if got is None:
-            got = _parse_cents(item.get('capturedAmount'))
-        if got is not None:
-            total += got
-            found = True
-    return total if found else None
-
-
-def _nexi_reversal_after_capture(data, capture_op):
-    """True if a reversal/refund was executed after the capture.
-
-    An executed CAPTURE must not be undone by a later decline (e.g. a new
-    attempt of the same order), but a VOID/REFUND that arrived after the
-    capture must. Without dates the reversal cannot be excluded: fail-closed.
-    """
-    data = data if isinstance(data, dict) else {}
-    capture_ts = _nexi_op_ts(capture_op) if capture_op else None
-    operations = data.get('operations')
-    for item in (operations if isinstance(operations, list) else []):
-        if not isinstance(item, dict):
-            continue
-        kind = str(item.get('operationType') or '').upper()
-        result = str(item.get('operationResult') or '').upper()
-        reversal_result = result in ('VOIDED', 'REFUNDED')
-        reversal_kind = kind in ('VOID', 'REFUND', 'CANCELLATION', 'CANCEL_ORDER')
-        if not (reversal_result or reversal_kind):
-            continue
-        if kind in ('AUTHORIZATION', 'CAPTURE') and not reversal_result:
-            continue
-        ts = _nexi_op_ts(item)
-        if capture_ts is None or ts is None or ts >= capture_ts:
-            return True
-    return False
 
 
 def _nexi_safe_fields(fields):
@@ -197,103 +77,8 @@ def _nexi_new_contract_id():
     return 'N' + secrets.token_hex(8).upper()
 
 
-# Nexi operations that decide how it went. With automatic capture Nexi returns
-# AUTHORIZATION *and* CAPTURE: looking only at the authorization leaves the
-# payment hanging even when the money was already taken.
-AUTH_OPS = {'AUTHORIZATION'}
-CAPTURE_OPS = {'CAPTURE'}
-
 # The customer who picks a card at checkout leaves the choice here.
 _NEXI_SESSION_KEY = 'nexi_saved_contract'
-
-
-def _nexi_op_time(op):
-    """Nexi operationTime as a datetime, or None if missing/unreadable."""
-    op = op if isinstance(op, dict) else {}
-    raw = str(op.get('operationTime') or '').strip()
-    if not raw:
-        return None
-    try:
-        return datetime.fromisoformat(raw.replace('Z', '+00:00'))
-    except ValueError:
-        return None
-
-
-def _nexi_op_ts(op):
-    """operationTime as a number (for sorting), or None."""
-    dt = _nexi_op_time(op)
-    if dt is None:
-        return None
-    try:
-        return dt.timestamp()
-    except (OverflowError, OSError, ValueError):
-        return None
-
-
-def _nexi_latest_operation(data, types):
-    """Latest operation of the given type, by date, in the Nexi response."""
-    data = data if isinstance(data, dict) else {}
-    operations = data.get('operations')
-    ops = [
-        o for o in (operations if isinstance(operations, list) else [])
-        if isinstance(o, dict) and str(o.get('operationType') or '').upper() in types
-    ]
-    if not ops:
-        return {}
-    # Sort on the parsed date, not on the string: 'T9:00' would come after
-    # 'T10:00' in a lexicographic comparison.
-    return max(ops, key=lambda o: (
-        _nexi_op_ts(o) is not None,
-        _nexi_op_ts(o) or 0.0,
-        str(o.get('operationTime') or ''),
-    ))
-
-
-def _nexi_decide_operation(data):
-    """The operation that decides the outcome: the latest of auth and capture.
-
-    :return: (operation, 'auth' | 'capture' | 'uncertain'). Empty operation if
-             Nexi has not returned any yet; 'uncertain' if AUTH and CAPTURE
-             disagree but the dates do not say which is the latest (the caller
-             must stay pending, never close).
-    """
-    auth = _nexi_latest_operation(data, AUTH_OPS)
-    capture = _nexi_latest_operation(data, CAPTURE_OPS)
-    if not auth:
-        return capture, 'capture'
-    if not capture:
-        return auth, 'auth'
-    auth_paid = is_paid(str(auth.get('operationResult') or '').upper())
-    capture_paid = is_paid(str(capture.get('operationResult') or '').upper())
-    auth_ts, capture_ts = _nexi_op_ts(auth), _nexi_op_ts(capture)
-    if auth_ts is None or capture_ts is None:
-        # Uncertain date: if they agree (both paid or both unpaid) the
-        # authorization decides; if they disagree the latest is unknown:
-        # uncertain, never close.
-        if auth_paid == capture_paid:
-            return auth, 'auth'
-        return {}, 'uncertain'
-    if capture_ts > auth_ts:
-        return capture, 'capture'
-    if capture_ts < auth_ts:
-        return auth, 'auth'
-    # Same instant: if they disagree, uncertain as above.
-    if auth_paid == capture_paid:
-        return capture, 'capture'
-    return {}, 'uncertain'
-
-
-def _nexi_got_order_id(data):
-    """orderId from the Nexi response, also in nested/hostile shapes."""
-    data = data if isinstance(data, dict) else {}
-    got = data.get('orderId')
-    if not got:
-        status = data.get('orderStatus')
-        if isinstance(status, dict):
-            order = status.get('order')
-            if isinstance(order, dict):
-                got = order.get('orderId')
-    return got or ''
 
 
 def _nexi_verify_url(provider, order_ref):
@@ -940,8 +725,12 @@ class PaymentTransactionNexi(models.Model):
     def _nexi_probe_paid(self, order_ref):
         """True if the Nexi order is paid, without touching the state.
 
-        Read-only probe for the reconciliation: an order that does not exist or
-        is not paid counts as False, never as an error.
+        Read-only probe for the reconciliation of the buttons order: an order
+        that does not exist, talks about another order, or is not fully
+        captured counts as False, never as an error. It answers through the
+        same policy the confirmation uses, so "paid" cannot mean two things:
+        an authorization without capture (no money moved) and a capture that
+        does not cover the expected figure are not paid.
         """
         self.ensure_one()
         try:
@@ -949,12 +738,9 @@ class PaymentTransactionNexi(models.Model):
                 'GET', _nexi_verify_url(self.provider_id, order_ref))
         except Exception:
             return False
-        got_order = _nexi_got_order_id(data)
-        if got_order != order_ref:
-            return False
-        op, _kind = _nexi_decide_operation(data)
-        op = op if isinstance(op, dict) else {}
-        return is_paid(str(op.get('operationResult') or '').upper())
+        outcome = verdict(
+            order_ref, data, to_cents(self.amount), self.currency_id.name)
+        return outcome.kind == DONE
 
     @api.model
     def _nexi_reconcile_pending(self, limit=20):
@@ -1119,18 +905,13 @@ class PaymentTransactionNexi(models.Model):
                     )
         return len(stuck) + len(errors) + len(leftovers)
 
-    def _nexi_uncertain_error(self, message, data=None, op=None):
+    def _nexi_uncertain_error(self, message, captured=None):
         """Non-final error: log captured/expected and leave it to the cron.
 
         A 4xx, a mismatched orderId, a missing currency or a partial capture do
         not prove the payment failed: they must be rechecked.
         """
         expected = to_cents(self.amount)
-        try:
-            captured = _nexi_capture_total(
-                data, op, currency=self.currency_id.name)
-        except Exception:
-            captured = None
         _logger.error(
             'Nexi %s: uncertain outcome (%s): captured=%s cents, expected=%s cents, '
             'order=%s',
@@ -1141,6 +922,63 @@ class PaymentTransactionNexi(models.Model):
             'nexi_uncertain': True,
             'nexi_last_captured': captured or 0,
         })
+        self._set_error(message)
+
+    def _nexi_apply_verdict(self, outcome):
+        """Write on the transaction what the policy decided.
+
+        The policy carries a reason, never prose: the message the customer reads
+        is chosen here, so the wording stays a choice of template and not part
+        of the rule about money.
+        """
+        if outcome.kind == DONE:
+            if outcome.masked_pan:
+                self.nexi_masked_pan = _nexi_short(outcome.masked_pan)
+            self.sudo().write({'nexi_uncertain': False})
+            if outcome.reason == ALREADY_CAPTURED:
+                # A capture executed before a later decline: the money is in.
+                message = (
+                    f'Nexi OK: capture already executed '
+                    f'({outcome.operation_result} later)')
+            else:
+                message = f'Nexi OK: {outcome.operation_result} ({outcome.decided_by})'
+            self._set_done(state_message=message)
+            return
+        if outcome.kind == PENDING:
+            if outcome.masked_pan:
+                self.nexi_masked_pan = _nexi_short(outcome.masked_pan)
+            if outcome.reason == CAPTURE_WAIVED:
+                # No manual capture: stay pending instead of going to error.
+                message = _('Nexi authorized, waiting for capture.')
+            elif outcome.reason == AUTHORIZED:
+                message = f'Nexi authorized: {outcome.operation_result}'
+            else:
+                message = f'Nexi pending: {outcome.operation_result or "unknown"}'
+            self._set_pending(state_message=message)
+            return
+        if outcome.kind == CANCEL:
+            self.sudo().write({'nexi_uncertain': False})
+            self._set_canceled(state_message=f'Nexi KO: {outcome.operation_result}')
+            return
+        message = {
+            INVALID_CURRENCY: _('Invalid Nexi amount.'),
+            CAPTURE_INCOMPLETE: _('Nexi capture incomplete.'),
+            AMOUNT_MISMATCH: _(
+                'Nexi captured amount does not match. Manual check required.'),
+        }.get(outcome.reason, _('Invalid Nexi return.'))
+        if outcome.uncertain or outcome.reason != AMOUNT_MISMATCH:
+            # Not proven failed, or a reason this model does not treat as final:
+            # the cron rechecks. Fail-closed, never a silent close.
+            self._nexi_uncertain_error(message, outcome.captured_cents)
+            return
+        # More money taken than expected: asking again will not change the
+        # answer, a human refunds it from the Nexi back office.
+        _logger.error(
+            'Nexi %s: captured %s cents > expected %s cents (order=%s): manual check.',
+            self.reference, outcome.captured_cents or 0, outcome.expected_cents,
+            self.nexi_order_id or self.reference,
+        )
+        self.sudo().write({'nexi_uncertain': False})
         self._set_error(message)
 
     def _process_notification_data(self, notification_data):
@@ -1158,15 +996,14 @@ class PaymentTransactionNexi(models.Model):
             return
         order_ref = str(raw_ref or self.reference)
         verify_url = _nexi_verify_url(provider, order_ref)
-        data = {}
-        result = ''
-        op = {}
-        op_kind = 'auth'
+        expected = to_cents(self.amount)
+        currency = self.currency_id.name
         # A single GET in the request path: the retries with sleep live in the
         # cron (_nexi_reconcile_pending passes attempts=3), otherwise a confirm
         # keeps a worker busy for up to ~60s and the self-inflicted 429s close it
         # with an error.
         attempts = 3 if (notification_data or {}).get('nexi_retry') else 1
+        outcome = None
         for attempt in range(attempts):
             try:
                 data = provider._nexi_make_request('GET', verify_url)
@@ -1186,136 +1023,33 @@ class PaymentTransactionNexi(models.Model):
                 _logger.warning(
                     'Nexi verification %s KO: %s', self.reference,
                     _nexi_sanitize_text(e, 200))
-                self._nexi_uncertain_error(_('Nexi is unreachable. Try again.'), data, op)
+                self._nexi_uncertain_error(_('Nexi is unreachable. Try again.'))
                 return
-            # A response that is not an object is an altered gateway: the guards
-            # of _nexi_decide_operation treat it as "uncertain".
-            data = data if isinstance(data, dict) else {}
-            # The latest operation decides: with automatic capture Nexi sends
-            # AUTHORIZATION + CAPTURE and the real outcome sits on the capture.
-            op, op_kind = _nexi_decide_operation(data)
-            op = op if isinstance(op, dict) else {}
-            # The order to verify is decided by the transaction; the response
-            # must however refer to THIS order. If the id is missing I cannot
-            # tell: fail-closed, not "trust it".
-            got_order = _nexi_got_order_id(data)
-            if not got_order or got_order != order_ref:
-                self._nexi_uncertain_error(_('Invalid Nexi return.'), data, op)
+            # The latest operation decides, the amount and the currency are
+            # checked, a capture already executed survives a later decline: all
+            # of it in the policy, which never touches the database. A response
+            # that is not an object is an altered gateway: unusable, not a
+            # payment.
+            outcome = verdict(order_ref, data, expected, currency)
+            if outcome.reason == INVALID_ORDER:
+                # The answer is about another order (or names none at all):
+                # there is nothing to read and no field to write about it.
+                self._nexi_uncertain_error(
+                    _('Invalid Nexi return.'), outcome.captured_cents)
                 return
-            result = str(op.get('operationResult') or '').upper()
-            if op_kind == 'uncertain':
-                # AUTH and CAPTURE disagree without reliable dates: the latest
-                # cannot be known. Pending, never close.
-                result = ''
+            if not outcome.retry:
                 break
-            # The scheme sometimes answers PENDING for a few seconds: retry
+            # The scheme sometimes answers PENDING for a few seconds: ask again
             # instead of declaring "pending" right away.
-            if result and result not in WAIT_RESULTS:
-                break
             if attempt < attempts - 1:
                 time.sleep(1.0)
-        last_total = _nexi_capture_total(data, op, currency=self.currency_id.name)
+        # What the gateway last said, even when the outcome is an error: the
+        # diagnostic fields are not part of the decision.
         self.sudo().write({
-            'nexi_last_result': result[:32] or False,
-            'nexi_last_captured': last_total or 0,
+            'nexi_last_result': (outcome.operation_result or '')[:32] or False,
+            'nexi_last_captured': outcome.captured_cents or 0,
         })
-        if is_paid(result):
-            # Check amount and currency of the operation that decided, then that
-            # the capture really covers the figure: all in cents.
-            expected = to_cents(self.amount)
-            want_cur = self.currency_id.name
-            got_cur = op.get('operationCurrency')
-            if not got_cur or got_cur != want_cur:
-                self._nexi_uncertain_error(_('Invalid Nexi amount.'), data, op)
-                return
-            amount_raw = op.get('operationAmount')
-            if amount_raw in (None, ''):
-                # On the capture the amount can be in capturedAmount.
-                amount_raw = op.get('capturedAmount')
-            got = _parse_cents(amount_raw)
-            masked = (
-                op.get('paymentInstrumentInfo')
-                or op.get('maskedPan')
-                or op.get('maskedPanAlias')
-                or False
-            )
-            # The amount that counts is the captured one: order total, operation
-            # figures or the sum of the captures in the same currency. If the
-            # operation that decided carries less than the total, the lower one
-            # wins: it closes only when every number seen covers the expected one.
-            total = _nexi_capture_total(data, op, currency=want_cur)
-            if op_kind != 'capture' and (total is None or total <= 0):
-                # Authorization without capture evidence: not a closed payment.
-                # It stays pending, the cron rechecks it.
-                self._set_pending(state_message=_('Nexi authorized, waiting for capture.'))
-                return
-            if total is None:
-                total = got
-            if got is not None and total is not None and got < total:
-                total = got
-            if total is None or total < expected:
-                self._nexi_uncertain_error(_('Nexi capture incomplete.'), data, op)
-                return
-            if total != expected:
-                # Capture higher than expected: money taken in excess (e.g. a
-                # stale session paid twice). It is not closed as done without a
-                # ceiling: the operator refunds it from the Nexi back office.
-                _logger.error(
-                    'Nexi %s: captured %s cents > expected %s cents '
-                    '(order=%s): manual check.',
-                    self.reference, total, expected,
-                    self.nexi_order_id or self.reference,
-                )
-                self.sudo().write({'nexi_uncertain': False})
-                self._set_error(_('Nexi captured amount does not match. Manual check required.'))
-                return
-            if masked:
-                self.nexi_masked_pan = _nexi_short(masked)
-            self.sudo().write({'nexi_uncertain': False})
-            self._set_done(state_message=f'Nexi OK: {result} ({op_kind})')
-        elif result in AUTH_RESULTS:
-            # Authorized but not captured: save the card and leave it pending.
-            operations = data.get('operations')
-            for auth_op in (operations if isinstance(operations, list) else []):
-                if not isinstance(auth_op, dict):
-                    continue
-                if auth_op.get('operationType') == 'AUTHORIZATION':
-                    masked_auth = (
-                        auth_op.get('paymentInstrumentInfo')
-                        or auth_op.get('maskedPan')
-                        or False
-                    )
-                    if masked_auth:
-                        self.nexi_masked_pan = _nexi_short(masked_auth)
-                    break
-            # No manual capture: stay pending instead of going to error.
-            self._set_pending(state_message=f'Nexi authorized: {result}')
-        elif result in KO_RESULTS:
-            expected = to_cents(self.amount)
-            captured = _nexi_capture_total(data, None, currency=self.currency_id.name)
-            capture_op = _nexi_latest_operation(data, CAPTURE_OPS)
-            if result not in ('REFUNDED', 'VOIDED') and captured is not None:
-                if captured == expected and not _nexi_reversal_after_capture(data, capture_op):
-                    # Capture already executed: a later decline (new attempt)
-                    # does not undo the money taken.
-                    self.sudo().write({'nexi_uncertain': False})
-                    self._set_done(
-                        state_message=f'Nexi OK: capture already executed ({result} later)')
-                    return
-                if captured > expected and not _nexi_reversal_after_capture(data, capture_op):
-                    _logger.error(
-                        'Nexi %s: captured %s cents > expected %s cents '
-                        '(order=%s): manual check.',
-                        self.reference, captured, expected,
-                        self.nexi_order_id or self.reference,
-                    )
-                    self.sudo().write({'nexi_uncertain': False})
-                    self._set_error(_('Nexi captured amount does not match. Manual check required.'))
-                    return
-            self.sudo().write({'nexi_uncertain': False})
-            self._set_canceled(state_message=f'Nexi KO: {result}')
-        else:
-            self._set_pending(state_message=f'Nexi pending: {result or "unknown"}')
+        self._nexi_apply_verdict(outcome)
 
     def _send_refund_request(self, amount_to_refund=None, create_refund_transaction=True):
         self.ensure_one()

@@ -197,6 +197,21 @@ def _install_addon():
 ODOO_HTTP, CONTROLLER, PROVIDER, TRANSACTION = _install_addon()
 
 
+def _load_verdict():
+    """Il modulo puro, senza passare dal pacchetto (che importa Odoo)."""
+    import importlib.util
+
+    path = ADDON_ROOT / 'models' / 'nexi_verdict.py'
+    spec = importlib.util.spec_from_file_location('nexi_verdict', str(path))
+    assert spec and spec.loader, 'models/nexi_verdict.py non trovato'
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+VERDICT = _load_verdict()
+
+
 class NexiHostsTest(unittest.TestCase):
     """#1: the production domain must pass, the rest must not."""
 
@@ -333,37 +348,37 @@ class DecideOperationTest(unittest.TestCase):
             ('AUTHORIZATION', 'EXECUTED', '2026-10-30T10:00:00'),
             ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
         )
-        op, kind = TRANSACTION._nexi_decide_operation(data)
+        op, kind = VERDICT.decide_operation(data)
         self.assertEqual(kind, 'capture')
         self.assertEqual(op['operationResult'], 'EXECUTED')
-        self.assertTrue(TRANSACTION.is_paid(op['operationResult']))
+        self.assertTrue(VERDICT.is_paid(op['operationResult']))
 
     def test_capture_only_is_not_lost(self):
         data = self._data(('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'))
-        op, kind = TRANSACTION._nexi_decide_operation(data)
+        op, kind = VERDICT.decide_operation(data)
         self.assertEqual(kind, 'capture')
-        self.assertTrue(TRANSACTION.is_paid(op['operationResult']))
+        self.assertTrue(VERDICT.is_paid(op['operationResult']))
 
     def test_pending_capture_waits(self):
         data = self._data(
             ('AUTHORIZATION', 'AUTHORIZED', '2026-10-30T10:00:00'),
             ('CAPTURE', 'PENDING', '2026-10-30T10:00:05'),
         )
-        op, _kind = TRANSACTION._nexi_decide_operation(data)
-        self.assertIn(op['operationResult'], TRANSACTION.WAIT_RESULTS)
+        op, _kind = VERDICT.decide_operation(data)
+        self.assertIn(op['operationResult'], VERDICT.WAIT_RESULTS)
 
     def test_latest_authorization_wins(self):
         data = self._data(
             ('AUTHORIZATION', 'EXECUTED', '2026-10-30T10:00:00'),
             ('AUTHORIZATION', 'DECLINED', '2026-10-30T10:05:00'),
         )
-        op, kind = TRANSACTION._nexi_decide_operation(data)
+        op, kind = VERDICT.decide_operation(data)
         self.assertEqual(kind, 'auth')
         self.assertEqual(op['operationResult'], 'DECLINED')
-        self.assertFalse(TRANSACTION.is_paid(op['operationResult']))
+        self.assertFalse(VERDICT.is_paid(op['operationResult']))
 
     def test_no_operations(self):
-        op, _kind = TRANSACTION._nexi_decide_operation({})
+        op, _kind = VERDICT.decide_operation({})
         self.assertEqual(op, {})
 
 
@@ -528,17 +543,17 @@ class ParseCentsTest(unittest.TestCase):
     """#7 punto 2: intero = centesimi, decimale = euro, resto = None."""
 
     def test_integer_is_cents(self):
-        self.assertEqual(TRANSACTION._parse_cents('1000'), 1000)
-        self.assertEqual(TRANSACTION._parse_cents(1000), 1000)
+        self.assertEqual(VERDICT.parse_cents('1000'), 1000)
+        self.assertEqual(VERDICT.parse_cents(1000), 1000)
 
     def test_decimal_is_euro(self):
-        self.assertEqual(TRANSACTION._parse_cents('10.00'), 1000)
-        self.assertEqual(TRANSACTION._parse_cents('12.34'), 1234)
+        self.assertEqual(VERDICT.parse_cents('10.00'), 1000)
+        self.assertEqual(VERDICT.parse_cents('12.34'), 1234)
 
     def test_garbage_is_none(self):
-        self.assertIsNone(TRANSACTION._parse_cents(None))
-        self.assertIsNone(TRANSACTION._parse_cents(''))
-        self.assertIsNone(TRANSACTION._parse_cents('abc'))
+        self.assertIsNone(VERDICT.parse_cents(None))
+        self.assertIsNone(VERDICT.parse_cents(''))
+        self.assertIsNone(VERDICT.parse_cents('abc'))
 
 
 class CaptureTotalTest(unittest.TestCase):
@@ -553,21 +568,21 @@ class CaptureTotalTest(unittest.TestCase):
         data = {'orderStatus': {'capturedAmount': '600'},
                 'operations': [self._op(operationAmount='600')]}
         self.assertEqual(
-            TRANSACTION._nexi_capture_total(data, self._op(operationAmount='1000')), 600)
+            VERDICT.capture_total(data, self._op(operationAmount='1000')), 600)
 
     def test_operation_amount_is_fallback(self):
         data = {'orderStatus': {}, 'operations': []}
         self.assertEqual(
-            TRANSACTION._nexi_capture_total(data, self._op(operationAmount='1000')), 1000)
+            VERDICT.capture_total(data, self._op(operationAmount='1000')), 1000)
 
     def test_operation_captured_amount_is_fallback(self):
         data = {'orderStatus': {}, 'operations': []}
         self.assertEqual(
-            TRANSACTION._nexi_capture_total(data, self._op(capturedAmount='1000')), 1000)
+            VERDICT.capture_total(data, self._op(capturedAmount='1000')), 1000)
 
     def test_order_status_captured_amount_is_first(self):
         data = {'orderStatus': {'capturedAmount': '1000'}, 'operations': []}
-        self.assertEqual(TRANSACTION._nexi_capture_total(data, self._op()), 1000)
+        self.assertEqual(VERDICT.capture_total(data, self._op()), 1000)
 
     def test_sum_skips_other_currencies(self):
         data = {'orderStatus': {}, 'operations': [
@@ -575,7 +590,7 @@ class CaptureTotalTest(unittest.TestCase):
             self._op(operationAmount='400', operationCurrency='USD'),
         ]}
         self.assertEqual(
-            TRANSACTION._nexi_capture_total(data, self._op(), currency='EUR'), 600)
+            VERDICT.capture_total(data, self._op(), currency='EUR'), 600)
 
     def test_sum_of_captures_is_last_resort(self):
         data = {'orderStatus': {}, 'operations': [
@@ -586,12 +601,12 @@ class CaptureTotalTest(unittest.TestCase):
             {'operationType': 'CAPTURE', 'operationResult': 'DECLINED',
              'operationAmount': '9999'},
         ]}
-        self.assertEqual(TRANSACTION._nexi_capture_total(data, self._op()), 1000)
+        self.assertEqual(VERDICT.capture_total(data, self._op()), 1000)
 
     def test_no_amount_anywhere_is_none(self):
         data = {'orderStatus': {}, 'operations': [self._op()]}
-        self.assertIsNone(TRANSACTION._nexi_capture_total(data, self._op()))
-        self.assertIsNone(TRANSACTION._nexi_capture_total({}, {}))
+        self.assertIsNone(VERDICT.capture_total(data, self._op()))
+        self.assertIsNone(VERDICT.capture_total({}, {}))
 
 
 
@@ -605,7 +620,7 @@ class CaptureTotalTest(unittest.TestCase):
             ('AUTHORIZATION', 'EXECUTED', '2026-10-30T10:00:00'),
             ('CAPTURE', 'EXECUTED', '2026-10-30T9:00:00'),
         )
-        op, kind = TRANSACTION._nexi_decide_operation(data)
+        op, kind = VERDICT.decide_operation(data)
         self.assertEqual(kind, 'auth')
         self.assertEqual(op['operationResult'], 'EXECUTED')
 
@@ -616,7 +631,7 @@ class CaptureTotalTest(unittest.TestCase):
             ('AUTHORIZATION', 'EXECUTED', None),
             ('CAPTURE', 'DECLINED', None),
         )
-        op, kind = TRANSACTION._nexi_decide_operation(data)
+        op, kind = VERDICT.decide_operation(data)
         self.assertEqual(kind, 'uncertain')
         self.assertEqual(op, {})
 
@@ -625,7 +640,7 @@ class CaptureTotalTest(unittest.TestCase):
             ('AUTHORIZATION', 'AUTHORIZED', None),
             ('CAPTURE', 'DECLINED', None),
         )
-        op, kind = TRANSACTION._nexi_decide_operation(data)
+        op, kind = VERDICT.decide_operation(data)
         self.assertEqual(kind, 'auth')
         self.assertEqual(op['operationResult'], 'AUTHORIZED')
 
@@ -634,11 +649,11 @@ class CaptureTotalTest(unittest.TestCase):
             ('AUTHORIZATION', 'EXECUTED', '2026-10-30T10:00:00'),
             ('CAPTURE', 'DECLINED', '2026-10-30T10:00:00'),
         )
-        op, kind = TRANSACTION._nexi_decide_operation(data)
+        op, kind = VERDICT.decide_operation(data)
         self.assertEqual(kind, 'uncertain')
 
     def test_capture_only_still_decides(self):
-        op, kind = TRANSACTION._nexi_decide_operation(
+        op, kind = VERDICT.decide_operation(
             self._data(('CAPTURE', 'EXECUTED', None))
         )
         self.assertEqual(kind, 'capture')
@@ -699,32 +714,32 @@ class ParseCentsNonFiniteTest(unittest.TestCase):
     def test_non_finite_is_none(self):
         for value in ('Infinity', '-Infinity', 'NaN', 'sNaN'):
             with self.subTest(value=value):
-                self.assertIsNone(TRANSACTION._parse_cents(value))
-                self.assertEqual(TRANSACTION.to_cents(value), 0)
+                self.assertIsNone(VERDICT.parse_cents(value))
+                self.assertEqual(VERDICT.to_cents(value), 0)
 
     def test_finite_still_works(self):
-        self.assertEqual(TRANSACTION._parse_cents('1000'), 1000)
-        self.assertEqual(TRANSACTION._parse_cents('10.00'), 1000)
+        self.assertEqual(VERDICT.parse_cents('1000'), 1000)
+        self.assertEqual(VERDICT.parse_cents('10.00'), 1000)
 
 
 class MalformedPayloadTest(unittest.TestCase):
     """#10 L-B1: unexpected gateway shapes, not exceptions."""
 
     def test_order_status_is_not_a_dict(self):
-        self.assertIsNone(TRANSACTION._nexi_capture_total(
+        self.assertIsNone(VERDICT.capture_total(
             {'orderStatus': 'broken', 'operations': 'broken'}, {}))
-        self.assertIsNone(TRANSACTION._nexi_capture_total('broken', []))
+        self.assertIsNone(VERDICT.capture_total('broken', []))
 
     def test_operations_is_not_a_list(self):
-        op, kind = TRANSACTION._nexi_decide_operation({'operations': 'broken'})
+        op, kind = VERDICT.decide_operation({'operations': 'broken'})
         self.assertEqual(op, {})
         self.assertEqual(kind, 'capture')
 
     def test_order_id_extraction_ignores_bad_shapes(self):
-        self.assertEqual(TRANSACTION._nexi_got_order_id(None), '')
-        self.assertEqual(TRANSACTION._nexi_got_order_id({'orderStatus': 'x'}), '')
+        self.assertEqual(VERDICT.got_order_id(None), '')
+        self.assertEqual(VERDICT.got_order_id({'orderStatus': 'x'}), '')
         self.assertEqual(
-            TRANSACTION._nexi_got_order_id(
+            VERDICT.got_order_id(
                 {'orderStatus': {'order': {'orderId': 'REF1'}}}),
             'REF1',
         )
@@ -1059,18 +1074,18 @@ class CaptureEvidenceTest(unittest.TestCase):
     def test_authorization_amount_is_not_capture(self):
         data = {'operations': [self.AUTH]}
         self.assertIsNone(
-            TRANSACTION._nexi_capture_total(data, self.AUTH, 'EUR'))
+            VERDICT.capture_total(data, self.AUTH, 'EUR'))
 
     def test_capture_operation_amount_is_capture(self):
         data = {'operations': [self.CAPTURE]}
         self.assertEqual(
-            TRANSACTION._nexi_capture_total(data, self.CAPTURE, 'EUR'), 1000)
+            VERDICT.capture_total(data, self.CAPTURE, 'EUR'), 1000)
 
     def test_order_level_capture_wins(self):
         data = {'orderStatus': {'capturedAmount': '1000'},
                 'operations': [self.AUTH]}
         self.assertEqual(
-            TRANSACTION._nexi_capture_total(data, self.AUTH, 'EUR'), 1000)
+            VERDICT.capture_total(data, self.AUTH, 'EUR'), 1000)
 
     def test_reversal_after_capture_is_detected(self):
         refund = {
@@ -1081,7 +1096,7 @@ class CaptureEvidenceTest(unittest.TestCase):
         }
         data = {'operations': [self.CAPTURE, refund]}
         self.assertTrue(
-            TRANSACTION._nexi_reversal_after_capture(data, self.CAPTURE))
+            VERDICT.reversal_after_capture(data, self.CAPTURE))
 
     def test_reversal_before_capture_does_not_count(self):
         refund = {
@@ -1092,13 +1107,13 @@ class CaptureEvidenceTest(unittest.TestCase):
         }
         data = {'operations': [refund, self.CAPTURE]}
         self.assertFalse(
-            TRANSACTION._nexi_reversal_after_capture(data, self.CAPTURE))
+            VERDICT.reversal_after_capture(data, self.CAPTURE))
 
     def test_reversal_without_dates_is_fail_closed(self):
         refund = {'operationType': 'REFUND', 'operationResult': 'EXECUTED'}
         data = {'operations': [self.CAPTURE, refund]}
         self.assertTrue(
-            TRANSACTION._nexi_reversal_after_capture(data, self.CAPTURE))
+            VERDICT.reversal_after_capture(data, self.CAPTURE))
 
 
 class UiStringsTest(unittest.TestCase):
