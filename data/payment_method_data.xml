@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
   <data noupdate="1">
-  <!-- Solo i codici che il core non ha: card, paypal, mybank, visa,
-       mastercard e amex esistono già in payment (attivati dall'hook), così
-       _get_from_code non trova due record con lo stesso codice. -->
+  <!-- Only the codes the core does not have: card, paypal, mybank, visa,
+       mastercard and amex already exist in payment (activated by the hook), so
+       _get_from_code does not find two records with the same code. -->
   <record id="payment_method_nexi_googlepay" model="payment.method">
     <field name="name">Google Pay</field>
     <field name="code">googlepay</field>
@@ -15,7 +15,7 @@
     <field name="active">True</field>
   </record>
   <record id="payment_method_nexi_paypal_bnpl" model="payment.method">
-    <field name="name">PayPal Paga in 3</field>
+    <field name="name">PayPal Pay in 3</field>
     <field name="code">paypal_bnpl</field>
     <field name="active">True</field>
   </record>

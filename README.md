@@ -38,6 +38,7 @@ Selling online with Odoo on an Italian Nexi terminal means choosing between send
 - **Per-terminal method check**: the **Check methods on Nexi** button tests the terminal and stores the result **for that provider only** — two Nexi providers in the same database can offer different methods. A timeout or broken configuration never hides a method, only an explicit refusal from Nexi (*service not enabled*) does. The `Hidden on every Nexi terminal` flag on the payment method hides it everywhere, by hand.
 - **OneClick saved cards** (Hosted Page): creates and reuses a Nexi contract per terminal. At checkout the saved cards are listed, the card the customer picks wins over automatic reuse, and *Use a new card* really starts a new card without sending a stored contract.
 - **No card data in Odoo**: only the masked PAN (`**** 1234`) is stored, never the full number or the CVV.
+- **Shopper texts follow the shop language**: the code carries English msgids and `i18n/it.po` ships the Italian text, so an Italian shop shows Italian and an English shop shows English. Other languages fall back to English.
 - **No refunds, no manual capture**: the module only reads `AUTHORIZATION` and `CAPTURE`, so a refund done from the Nexi back office leaves the transaction `done` — record it by hand in Odoo.
 
 ## Install
@@ -82,7 +83,7 @@ Notes:
 | `X-Api-Key` | XPay Web terminal key |
 | Environment | Test or Production |
 | Nexi URL (test/production) | Endpoint `…/psp/api/v1/orders/hpp` |
-| Mode | **Hosted Page** or **Embedded (Build v3)** |
+| Checkout mode | **Hosted Page** or **Embedded (Build v3)** |
 | Shop public base | Empty = `web.base.url`. Enter the public domain (needed for return URLs and for Build) |
 | Preselected method | Empty = all, or e.g. `GOOGLEPAY` |
 | OneClick | Creates and reuses a contract for saved cards (Hosted Page) |
@@ -102,6 +103,7 @@ payment_nexi/
 ├── __manifest__.py                 # version 1.4.10, depends, data files
 ├── controllers/main.py             # Nexi return + Build routes
 ├── data/payment_method_data.xml    # payment methods (Nexi-only codes; shared ones come from the core)
+├── i18n/it.po                      # Italian translation (English msgids in the code)
 ├── models/
 │   ├── payment_provider.py         # fields, API calls, URLs
 │   ├── payment_method_nexi.py      # methods visible at checkout

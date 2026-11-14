@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Provider Nexi XPay Web. Solo redirect (Hosted Page). Niente dati carta in Odoo."""
+"""Nexi XPay Web provider: Hosted Page redirect or embedded Build v3 card fields. No card data in Odoo."""
 import logging
 import re
 import threading
@@ -14,10 +14,10 @@ from odoo.exceptions import ValidationError
 
 _logger = logging.getLogger(__name__)
 
-# Impossibile tenere un worker sync appeso a un gateway che sgocciola:
-# il timeout di requests è per singola lettura, non per la risposta intera.
+# A sync worker cannot be kept hanging on a dripping gateway: the requests
+# timeout is per read, not for the whole response.
 NEXI_TOTAL_TIMEOUT = 20
-# Le risposte Nexi sono piccole: un corpo enorme è un attacco, non un ordine.
+# Nexi responses are small: a huge body is an attack, not an order.
 NEXI_MAX_BODY = 1024 * 1024
 
 _ANSI_RE = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
@@ -26,7 +26,7 @@ _CTRL_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]')
 
 
 def _nexi_sanitize_text(value, limit=300):
-    """Testo gateway pronto per un log: una riga, senza ANSI/bidi/control."""
+    """Gateway text ready for a log: one line, no ANSI/bidi/control chars."""
     text = _ANSI_RE.sub('', str(value or ''))
     text = _BIDI_RE.sub('', text)
     text = _CTRL_RE.sub(' ', text)
@@ -35,10 +35,10 @@ def _nexi_sanitize_text(value, limit=300):
 
 
 def _nexi_clean_base_url(value):
-    """Base pubblica https valida, o stringa vuota.
+    """Valid public https base, or an empty string.
 
-    Non si usa mai l'Host della richiesta: un proxy che non sanitizza gli
-    header potrebbe far finire i return URL su un dominio scelto dall'attaccante.
+    The request Host header is never used: a proxy that does not sanitize the
+    headers could send the return URLs to a domain chosen by the attacker.
     """
     text = str(value or '').strip().rstrip('/')
     if not text:
@@ -63,7 +63,7 @@ def _nexi_clean_base_url(value):
 
 
 def _nexi_base_allowed(value, allowed_hosts):
-    """True se l'host della base è fra quelli configurati per il sito."""
+    """True if the base host is one of the hosts configured for the site."""
     try:
         host = (urlparse(str(value or '')).hostname or '').lower()
     except ValueError:
@@ -72,37 +72,36 @@ def _nexi_base_allowed(value, allowed_hosts):
 
 
 def _nexi_read_limited(resp, max_bytes=NEXI_MAX_BODY, deadline=None, now=time.monotonic):
-    """Legge il corpo a blocchi, con tetto di byte e scadenza complessiva."""
+    """Reads the body in chunks, with a byte cap and an overall deadline."""
     length = resp.headers.get('Content-Length')
     if length:
         try:
             if int(length) > max_bytes:
-                raise NexiUnavailable(_('Nexi risposta non valida. Riprova.'))
+                raise NexiUnavailable(_('Invalid Nexi response. Try again.'))
         except (TypeError, ValueError):
             pass
     chunks = []
     total = 0
     for chunk in resp.iter_content(8192):
         if deadline is not None and now() > deadline:
-            raise NexiUnavailable(_('Nexi non raggiungibile. Riprova.'))
+            raise NexiUnavailable(_('Nexi is unreachable. Try again.'))
         if not chunk:
             continue
         total += len(chunk)
         if total > max_bytes:
-            raise NexiUnavailable(_('Nexi risposta non valida. Riprova.'))
+            raise NexiUnavailable(_('Invalid Nexi response. Try again.'))
         chunks.append(chunk)
     return b''.join(chunks)
 
 
 def _nexi_bounded(call, timeout=None):
-    """Esegue `call` entro `timeout` secondi, altrimenti NexiUnavailable.
+    """Runs `call` within `timeout` seconds, otherwise NexiUnavailable.
 
-    `requests` non ha un timeout complessivo: quello per-read non ferma un
-    gateway che manda un byte di header ogni pochi secondi. Il thread che
-    esegue la chiamata è daemon, quindi il worker sync torna libero alla
-    scadenza e un processo che si ferma non lo aspetta. La connessione resta
-    aperta finché il gateway non smette: è il prezzo per non tenere appeso
-    il worker.
+    `requests` has no overall timeout: the per-read one does not stop a
+    gateway that sends one header byte every few seconds. The thread that runs
+    the call is a daemon, so the sync worker is free again at the deadline and
+    a process that stops does not wait for it. The connection stays open until
+    the gateway stops: that is the price for not keeping the worker hanging.
     """
     timeout = NEXI_TOTAL_TIMEOUT if timeout is None else timeout
     box = {}
@@ -110,34 +109,42 @@ def _nexi_bounded(call, timeout=None):
     def runner():
         try:
             box['value'] = call()
-        except BaseException as exc:  # rilanciata nel chiamante
+        except BaseException as exc:  # re-raised in the caller
             box['error'] = exc
 
     worker = threading.Thread(target=runner, name='nexi-http', daemon=True)
     worker.start()
     worker.join(timeout)
     if worker.is_alive():
-        _logger.warning('Nexi: deadline totale di %ss superato', timeout)
-        raise NexiUnavailable(_('Nexi non raggiungibile. Riprova.'))
+        _logger.warning('Nexi: total deadline of %ss exceeded', timeout)
+        raise NexiUnavailable(_('Nexi is unreachable. Try again.'))
     error = box.get('error')
     if error is not None:
         raise error.with_traceback(error.__traceback__)
     return box.get('value')
 
 
-# Domini Nexi ammessi. Solo questi, resto rifiutato.
-# xpay.nexigroup.com = produzione, xpaysandbox.nexigroup.com = test.
-# (xpay.nexi.it non risolve più: tolto, il JS non l'ha mai accettato.)
-NEXI_HOSTS = ('xpay.nexigroup.com', 'xpaysandbox.nexigroup.com')
+NEXI_PROD_BASE = 'https://xpay.nexigroup.com'
+NEXI_SANDBOX_BASE = 'https://xpaysandbox.nexigroup.com'
+# Allowed Nexi domains. Only these: production and sandbox.
+# (xpay.nexi.it no longer resolves: removed, the JS never accepted it.)
+NEXI_HOSTS = tuple(
+    urlparse(u).hostname for u in (NEXI_PROD_BASE, NEXI_SANDBOX_BASE)
+)
+# Odoo payment.method codes linked to a Nexi provider.
+NEXI_METHOD_CODES = (
+    'card', 'googlepay', 'applepay', 'bancomatpay', 'mybank', 'paypal',
+    'paypal_bnpl', 'visa', 'mastercard', 'amex',
+)
 
-# Importo di prova per "Verifica metodi". Alcuni servizi hanno minimi propri:
-# PayPal Paga in 3 sotto i 30 € viene rifiutato da Nexi (PS0064/GW0043), quindi
-# la verifica userebbe un errore di importo al posto della disponibilità vera.
+# Test amount for "Check methods". Some services have their own minimum:
+# PayPal Pay in 3 below EUR 30 is refused by Nexi (PS0064/GW0043), so the check
+# would see an amount error instead of the real availability.
 CHECK_AMOUNTS = {'PAYPAL_PAGAIN3': '5000'}
 CHECK_AMOUNT_DEFAULT = '100'
 
-# Testi con cui Nexi dice "questo servizio non è attivo su questo terminale".
-# Solo questi spengono un metodo: un timeout o una chiave sbagliata no.
+# Texts with which Nexi says "this service is not enabled on this terminal".
+# Only these disable a method: a timeout or a wrong key does not.
 REJECTION_MARKERS = (
     'not enabled', 'not_enabled', 'not allowed', 'not_allowed',
     'not configured', 'not_configured', 'not available', 'not_available',
@@ -147,49 +154,50 @@ REJECTION_MARKERS = (
 
 
 class NexiUnavailable(ValidationError):
-    """Nexi non ha risposto (rete, timeout, risposta illeggibile).
+    """Nexi did not answer (network, timeout, unreadable response).
 
-    Non dice niente sul metodo provato: chi la riceve non deve disabilitare
-    niente, perché il problema è la connessione o la configurazione.
+    It says nothing about the method that was tried: the receiver must not
+    disable anything, because the problem is the connection or the
+    configuration.
     """
 
 
 class NexiApiError(ValidationError):
-    """Nexi ha risposto con un errore suo: stato HTTP e codice gateway.
+    """Nexi answered with an error of its own: HTTP status and details.
 
-    Servono a distinguere un metodo spento sul terminale (400 con
-    "paymentService not enabled") da una chiave o un URL sbagliati (401/403)
-    e da un guasto temporaneo (429/5xx).
+    They tell a method disabled on the terminal (400 with
+    "paymentService not enabled") from a wrong key or URL (401/403) and from a
+    temporary failure (429/5xx).
     """
 
-    def __init__(self, message, status_code=None, gateway_code=None):
+    def __init__(self, message, status_code=None):
         super().__init__(message)
         self.status_code = status_code
-        self.gateway_code = gateway_code
 
 
 def _classify_nexi_check_error(err):
-    """'config' | 'disabled' | 'unknown' per la verifica dei metodi.
+    """'config' | 'disabled' | 'unknown' for the method check.
 
-    - ``config``: chiave o URL sbagliati (401/403, oppure i nostri messaggi di
-      configurazione) → fermare la verifica e dirlo all'admin.
-    - ``disabled``: Nexi ha detto che il servizio non è attivo su questo
-      terminale → spegnere il metodo.
-    - ``unknown``: guasto temporaneo o risposta mai vista → non toccare niente.
+    - ``config``: wrong key or URL (401/403, or our own configuration
+      messages) -> stop the check and tell the admin.
+    - ``disabled``: Nexi said the service is not enabled on this terminal ->
+      disable the method.
+    - ``unknown``: temporary failure or a response never seen before -> touch
+      nothing.
     """
     status = getattr(err, 'status_code', None)
     if status in (401, 403):
         return 'config'
     if status and (status in (408, 429) or status >= 500):
-        # Guasto temporaneo (rate limit, gateway giù): non parla del metodo.
-        # Va controllato PRIMA dei marcatori, altrimenti un "Service not
-        # available" su 503 spegne metodi che funzionano.
+        # Temporary failure (rate limit, gateway down): it does not speak about
+        # the method. It must be checked BEFORE the markers, otherwise a
+        # "Service not available" on a 503 disables methods that work.
         return 'unknown'
     msg = str(err) or ''
     low = msg.lower()
     if any(k in low for k in (
-        'manca url', 'manca la x-api-key', 'x-api-key', 'url nexi non valido',
-        'serve https su un dominio nexi',
+        'missing url', 'url is missing', 'x-api-key', 'invalid nexi url',
+        'https on a nexi domain',
     )):
         return 'config'
     if any(marker in low for marker in REJECTION_MARKERS):
@@ -197,23 +205,24 @@ def _classify_nexi_check_error(err):
     return 'unknown'
 
 
-# Caratteri che un client HTTP può leggere come separatore di authority ma che
-# urlparse tratta come testo: con questi un URL "sembra" Nexi e finisce altrove.
+# Characters an HTTP client can read as an authority separator but urlparse
+# treats as plain text: with these a URL "looks" like Nexi and ends up
+# elsewhere.
 _URL_FORBIDDEN_CHARS = ('\\', ' ', '\t', '\r', '\n', '\x00', '\x0b', '\x0c')
 
 
 def is_nexi_url(url):
-    """True solo per https su un dominio Nexi, con l'authority "pulita".
+    """True only for https on a Nexi domain, with a "clean" authority.
 
-    Unico posto dove si controlla il dominio: lo usano sia il provider sia il
-    controller, così le due regole non possono divergere.
+    The only place where the domain is checked: both the provider and the
+    controller use it, so the two rules cannot diverge.
 
-    Non basta `urlparse().hostname`: con un backslash o un userinfo il parser di
-    Python e quello del client HTTP (urllib3) leggono due host diversi. Per
-    `https://evil.tld\\@xpay.nexigroup.com/...` urlparse dice
-    `xpay.nexigroup.com` mentre requests chiama `evil.tld`, e la X-Api-Key
-    partirebbe verso l'attaccante. Qui si pretende che il netloc sia esattamente
-    l'host atteso (o `host:443`), senza userinfo, backslash o porta strana.
+    `urlparse().hostname` is not enough: with a backslash or a userinfo the
+    Python parser and the HTTP client parser (urllib3) read two different
+    hosts. For `https://evil.tld\\@xpay.nexigroup.com/...` urlparse says
+    `xpay.nexigroup.com` while requests calls `evil.tld`, and the X-Api-Key
+    would leave towards the attacker. Here the netloc must be exactly the
+    expected host (or `host:443`), with no userinfo, backslash or odd port.
     """
     if not url:
         return False
@@ -233,14 +242,14 @@ def is_nexi_url(url):
         return False
     if port not in (None, 443):
         return False
-    # netloc deve essere l'host nudo: niente userinfo, porte o caratteri strani.
+    # The netloc must be the bare host: no userinfo, ports or odd characters.
     if netloc not in (host, host + ':443'):
         return False
     return any(host == h or host.endswith('.' + h) for h in NEXI_HOSTS)
 
 
 def _nexi_error_detail(resp):
-    """Prima descrizione utile da Nexi, senza dati sensibili."""
+    """First useful description from Nexi, without sensitive data."""
     try:
         payload = resp.json() or {}
         errs = payload.get('errors') if isinstance(payload, dict) else None
@@ -251,102 +260,92 @@ def _nexi_error_detail(resp):
                 return '%s [%s]' % (desc, code) if code else desc
     except (ValueError, AttributeError, RecursionError, OverflowError):
         pass
-    return 'errore. Riprova.'
-
-
-def _nexi_error_code(resp):
-    """Codice errore Nexi, se la risposta ne porta uno."""
-    try:
-        payload = resp.json() or {}
-        errs = payload.get('errors') if isinstance(payload, dict) else None
-        if isinstance(errs, list) and errs and isinstance(errs[0], dict):
-            return _nexi_sanitize_text(errs[0].get('code'), 16) or None
-    except (ValueError, AttributeError, RecursionError, OverflowError):
-        pass
-    return None
+    return 'error. Try again.'
 
 
 class PaymentProviderNexi(models.Model):
     _inherit = 'payment.provider'
 
     code = fields.Selection(selection_add=[('nexi', 'Nexi XPay Web')], ondelete={'nexi': 'set default'})
-    # Chiave API = password del terminale. La trovi in Nexi Business > Back Office > Admin > APIKey.
+    # API key = terminal password. You find it in Nexi Business > Back Office > Admin > APIKey.
     nexi_api_key = fields.Char(
-        string='X-Api-Key', help='Chiave del terminale XPay Web.',
+        string='X-Api-Key', help='XPay Web terminal key.',
         groups='base.group_system',
     )
-    # Test o Produzione. Usa sempre Test prima con le chiavi finte.
+    # Test or Production. Always try Test first with the fake keys.
     nexi_env = fields.Selection(
-        [('test', 'Test'), ('prod', 'Produzione')],
-        default='test', string='Ambiente',
+        [('test', 'Test'), ('prod', 'Production')],
+        default='test', string='Environment',
     )
-    # Come mostri la cassa: redirect pagina Nexi (HPP) o form dentro il sito (Build v3).
+    # How the checkout is shown: redirect to the Nexi page (HPP) or a form
+    # inside the site (Build v3).
     nexi_mode = fields.Selection(
         [('hpp', 'Hosted Page (redirect)'), ('build', 'Embedded Build v3 (beta)')],
-        default='hpp', string='Modalità',
-        help='HPP = vai su pagina Nexi. Build = form nel tuo sito con iframe Nexi (serve URL pubblico, localhost non va).',
+        default='hpp', string='Checkout mode',
+        help='HPP = redirect to the Nexi page. Build = form on your site with Nexi iframes (needs a public URL; localhost is not accepted).',
     )
-    # Preselezione metodo su pagina Nexi. Vuoto = tutti. Valori da tabella Nexi (es. GOOGLEPAY).
+    # Method preselection on the Nexi page. Empty = all. Values from the Nexi
+    # table (e.g. GOOGLEPAY).
     nexi_payment_service = fields.Char(
-        string='Metodo preselezionato',
-        help='Passato come paymentService a Nexi. Vuoto = tutti i metodi. Valori da tabella codifica PaymentService (es. GOOGLEPAY). Solo maiuscole, cifre, underscore.',
+        string='Preselected method',
+        help='Passed to Nexi as paymentService. Empty = all methods. Values from the PaymentService code table (e.g. GOOGLEPAY). Uppercase letters, digits and underscores only.',
     )
-    # Base pubblica del negozio (https://...). Usata per resultUrl e merchantUrl.
-    # Se vuota, usa web.base.url. Non si usa mai l'header Host della richiesta.
+    # Public base of the shop (https://...). Used for resultUrl and merchantUrl.
+    # If empty, web.base.url is used. The request Host header is never used.
     nexi_public_base = fields.Char(
-        string='Base pubblica negozio',
-        help='Es. https://negozio.example.com. Se vuota, usa web.base.url.',
+        string='Shop public base',
+        help='e.g. https://shop.example.com. If empty, web.base.url is used.',
         groups='base.group_system',
     )
-    # OneClick CIT: salva carta con contratto e riusala dopo.
+    # OneClick CIT: save the card with a contract and reuse it later.
     nexi_oneclick = fields.Boolean(
         string='OneClick CIT',
         default=False,
-        help='Se attivo: primo pagamento crea contratto CIT, i dopo riusano contractId via HPP.',
+        help='When enabled: the first payment creates a CIT contract, later ones reuse the contractId via HPP.',
     )
 
-    # --- URL base. Non li metto a mano: li prendi dalla scheda API su developer.nexi.it ---
+    # --- Base URLs. Do not type them by hand: copy them from the API page on developer.nexi.it ---
     nexi_test_url = fields.Char(
-        string='URL test Nexi',
-        help='URL test completo dalla scheda API su developer.nexi.it (es. pagina Pagamenti).',
+        string='Nexi test URL',
+        help='Full test URL from the API page on developer.nexi.it (e.g. the Payments page).',
         groups='base.group_system',
     )
     nexi_prod_url = fields.Char(
-        string='URL produzione Nexi',
-        help='URL produzione completo dalla scheda API su developer.nexi.it.',
+        string='Nexi production URL',
+        help='Full production URL from the API page on developer.nexi.it.',
         groups='base.group_system',
     )
-    # Esito ultima verifica metodi su Nexi. Solo lettura.
+    # Outcome of the last method check on Nexi. Read only.
     nexi_methods_report = fields.Text(
-        string='Metodi verificati', readonly=True,
-        help='Ultimo controllo su Nexi: quali paymentService il terminale accetta.',
+        string='Checked methods', readonly=True,
+        help='Last check against Nexi: which paymentServices the terminal accepts.',
     )
-    nexi_methods_checked = fields.Datetime(string='Verifica del', readonly=True)
-    # Esito per singolo terminale: due provider Nexi possono avere metodi diversi.
+    nexi_methods_checked = fields.Datetime(string='Checked on', readonly=True)
+    # Outcome per terminal: two Nexi providers can have different methods.
     nexi_method_availability_ids = fields.One2many(
         'payment.nexi.method.availability', 'provider_id',
-        string='Metodi del terminale', readonly=True, groups='base.group_system',
+        string='Terminal methods', readonly=True, groups='base.group_system',
     )
 
     def button_nexi_check_methods(self):
-        """Prova ogni metodo su Nexi e salva l'esito per QUESTO terminale."""
+        """Test every method on Nexi and store the outcome for THIS terminal."""
         self.ensure_one()
         from .payment_transaction import METHOD_SERVICE
         if not self.nexi_api_key:
             raise ValidationError(_(
-                'Manca la X-Api-Key: senza chiave non posso verificare i metodi.'
+                'X-Api-Key is missing: methods cannot be checked without it.'
             ))
         service_by_method = {}
         for m in self.payment_method_ids.filtered(lambda x: x.is_primary):
             if m.code in METHOD_SERVICE:
                 service_by_method[m] = METHOD_SERVICE[m.code]
         if not service_by_method:
-            raise ValidationError(_('Nessun metodo Nexi da verificare.'))
+            raise ValidationError(_('No Nexi method to check.'))
         base = self._nexi_base_url()
         lines = []
         for method, service in sorted(service_by_method.items(), key=lambda x: x[0].name):
             enabled, detail = self._nexi_check_service(base, service)
-            # L'esito è del terminale, non del metodo in generale.
+            # The outcome belongs to the terminal, not to the method in general.
             self._nexi_store_availability(method, enabled, detail)
             lines.append('%s (%s): %s' % (method.name, service, detail))
         self.nexi_methods_report = '\n'.join(lines)
@@ -354,15 +353,15 @@ class PaymentProviderNexi(models.Model):
         return True
 
     def _nexi_check_service(self, base, service):
-        """Prova un paymentService su Nexi con un importo compatibile.
+        """Test one paymentService on Nexi with a compatible amount.
 
-        :return: (True | False | None, descrizione). None = non verificato:
-                 Nexi non ha risposto o la configurazione è rotta, quindi lo
-                 stato del metodo resta quello di prima.
+        :return: (True | False | None, description). None = not checked:
+                 Nexi did not answer or the configuration is broken, so the
+                 method keeps its previous state.
         """
         amount = CHECK_AMOUNTS.get(service, CHECK_AMOUNT_DEFAULT)
-        # Nexi: orderId massimo 27 caratteri. "CK" + servizio corto + casuale
-        # resta sotto il limite per ogni metodo.
+        # Nexi: orderId is at most 27 characters. "CK" + a short service name
+        # + randomness stays under the limit for every method.
         ref = 'CK%s%s' % (service.replace('_', '')[:10], uuid.uuid4().hex[:6].upper())
         payload = {
             'order': {
@@ -379,24 +378,24 @@ class PaymentProviderNexi(models.Model):
         try:
             self._nexi_make_request('POST', base, payload)
         except NexiUnavailable as e:
-            # Rete o timeout: non dice niente sul metodo.
-            return None, 'non verificato (%s)' % str(e)[:80]
+            # Network or timeout: it says nothing about the method.
+            return None, 'not checked (%s)' % str(e)[:80]
         except ValidationError as e:
             kind = _classify_nexi_check_error(e)
             if kind == 'config':
-                # Chiave o URL sbagliati: ogni metodo fallirebbe per lo stesso
-                # motivo, quindi fermo la verifica invece di spegnerli tutti.
+                # Wrong key or URL: every method would fail for the same
+                # reason, so the check stops instead of disabling them all.
                 raise NexiUnavailable(_(
-                    'Verifica metodi interrotta: controlla X-Api-Key e URL Nexi (%s).'
+                    'Method check aborted: check X-Api-Key and Nexi URL (%s).'
                 ) % str(e)[:120])
             if kind == 'disabled':
-                return False, 'rifiutato dal terminale'
-            # Errore che non parla del metodo: non lo spengo.
-            return None, 'errore (%s)' % str(e)[:80]
-        return True, 'attivo'
+                return False, 'refused by the terminal'
+            # An error that does not speak about the method: do not disable it.
+            return None, 'error (%s)' % str(e)[:80]
+        return True, 'enabled'
 
     def _nexi_store_availability(self, method, enabled, detail):
-        """Salva l'esito della verifica per questo terminale."""
+        """Store the check outcome for this terminal."""
         Avail = self.env['payment.nexi.method.availability'].sudo()
         values = {
             'checked_at': fields.Datetime.now(),
@@ -417,16 +416,16 @@ class PaymentProviderNexi(models.Model):
         url = self.nexi_prod_url if self.nexi_env == 'prod' else self.nexi_test_url
         if not url:
             raise ValidationError(_(
-                'Manca URL Nexi. Metti URL test/produzione dalla scheda API su developer.nexi.it.'
+                'Nexi URL is missing. Enter the test/production URL from the API page on developer.nexi.it.'
             ))
         url = url.strip().rstrip('/')
-        # https + dominio Nexi: la chiave non deve mai uscire da lì.
+        # https + Nexi domain: the key must never leave there.
         if not is_nexi_url(url):
-            raise ValidationError(_('URL Nexi non valido: serve https su un dominio Nexi.'))
+            raise ValidationError(_('Invalid Nexi URL: HTTPS on a Nexi domain is required.'))
         return url
 
     def _nexi_build_url(self):
-        """URL ordini Build v3: stesso host di HPP, path /orders/build."""
+        """Build v3 orders URL: same host as HPP, path /orders/build."""
         base = self._nexi_base_url()
         if base.endswith('/orders/hpp'):
             return base[: -len('/orders/hpp')] + '/orders/build'
@@ -437,9 +436,15 @@ class PaymentProviderNexi(models.Model):
             prefix = prefix.split('/orders/')[0]
         return host_base + prefix + '/orders/build'
 
+    def _nexi_sdk_url(self):
+        """Nexi Build SDK URL for this terminal's environment."""
+        self.ensure_one()
+        base = NEXI_SANDBOX_BASE if self.nexi_env == 'test' else NEXI_PROD_BASE
+        return base + '/monetaweb/resources/hfsdk.js'
+
     def _get_supported_currencies(self):
-        # Nexi sandbox vuole EUR. Tieni solo EUR, ma solo per Nexi: gli altri
-        # provider sullo stesso negozio non devono essere limitati.
+        # The Nexi sandbox wants EUR. Keep EUR only, but only for Nexi: the
+        # other providers on the same shop must not be limited.
         self.ensure_one()
         if self.code != 'nexi':
             return super()._get_supported_currencies()
@@ -449,20 +454,17 @@ class PaymentProviderNexi(models.Model):
         self.ensure_one()
         if self.code != 'nexi':
             return super()._get_default_payment_method_codes()
-        # I brand core (Visa/Mastercard/Amex) non sono metodi primari: senza
-        # questi codici _activate_default_pms li lascia spenti e la riga Carta
-        # non mostra più le loro icone.
-        return {
-            'card', 'googlepay', 'applepay', 'bancomatpay', 'mybank', 'paypal',
-            'paypal_bnpl', 'visa', 'mastercard', 'amex',
-        }
+        # The core brands (Visa/Mastercard/Amex) are not primary methods:
+        # without these codes _activate_default_pms leaves them off and the
+        # Card row no longer shows their icons.
+        return set(NEXI_METHOD_CODES)
 
     def _activate_default_pms(self):
         result = super()._activate_default_pms()
         if not self.filtered(lambda p: p.code == 'nexi'):
             return result
-        # La riga Carta mostra i primi 4 brand attivi per sequence/name: i
-        # brand core hanno sequence 1000 e finirebbero dopo altri circuiti.
+        # The Card row shows the first 4 active brands by sequence/name: the
+        # core brands have sequence 1000 and would end up after other schemes.
         brands = self.env['payment.method'].with_context(active_test=False).search([
             ('code', 'in', ('visa', 'mastercard', 'amex')),
         ])
@@ -472,8 +474,8 @@ class PaymentProviderNexi(models.Model):
 
     def _compute_feature_support_fields(self):
         super()._compute_feature_support_fields()
-        # v1 semplice: niente rimborso, niente cattura manuale.
-        # Token solo se OneClick acceso: mostra "salva carta" in cassa.
+        # Simple v1: no refund, no manual capture.
+        # Token only with OneClick on: it shows "save card" at checkout.
         for p in self.filtered(lambda r: r.code == 'nexi'):
             p.support_refund = 'none'
             p.support_tokenization = bool(p.nexi_oneclick)
@@ -488,16 +490,16 @@ class PaymentProviderNexi(models.Model):
         return super()._get_redirect_form_view(is_validation=is_validation)
 
     def _nexi_make_request(self, method, url, payload=None, params=None):
-        """Chiama Nexi in REST JSON. Semplice, con timeout.
+        """Call Nexi over REST JSON. Simple, with timeouts.
 
-        :raise NexiUnavailable: Nexi non ha risposto o la risposta è illeggibile.
-        :raise ValidationError: Nexi ha risposto con un errore suo.
+        :raise NexiUnavailable: Nexi did not answer or the response is unreadable.
+        :raise ValidationError: Nexi answered with an error of its own.
         """
         self.ensure_one()
-        # Ultima difesa: la chiave non esce se l'URL non è https su un dominio
-        # Nexi "pulito", chiunque abbia costruito l'URL.
+        # Last line of defence: the key does not leave unless the URL is https
+        # on a "clean" Nexi domain, whoever built the URL.
         if not is_nexi_url(url):
-            raise ValidationError(_('URL Nexi non valido: serve https su un dominio Nexi.'))
+            raise ValidationError(_('Invalid Nexi URL: HTTPS on a Nexi domain is required.'))
         headers = {
             'Content-Type': 'application/json',
             'X-Api-Key': self.nexi_api_key or '',
@@ -508,36 +510,36 @@ class PaymentProviderNexi(models.Model):
 
         def call():
             try:
-                # Niente redirect: la chiave non deve mai viaggiare su un altro host.
-                # stream=True + _nexi_read_limited: il timeout di requests è per
-                # singola lettura, non ferma un gateway che manda un byte alla volta.
+                # No redirects: the key must never travel to another host.
+                # stream=True + _nexi_read_limited: the requests timeout is per
+                # read, it does not stop a gateway that sends one byte at a time.
                 resp = requests.request(
                     method, url, json=payload, params=params, headers=headers,
                     timeout=(5, 10), allow_redirects=False, stream=True,
                 )
             except requests.exceptions.RequestException:
-                _logger.exception('Nexi non raggiungibile: %s', url)
-                raise NexiUnavailable(_('Nexi non raggiungibile. Riprova.'))
-            # Secondo livello: qui il budget può essere già scaduto, in quel
-            # caso non serve leggere il corpo.
+                _logger.exception('Nexi unreachable: %s', url)
+                raise NexiUnavailable(_('Nexi is unreachable. Try again.'))
+            # Second level: the budget may already be gone here, in which case
+            # there is no point in reading the body.
             if time.monotonic() > deadline:
                 resp.close()
-                _logger.warning('Nexi: risposta oltre il deadline: %s', url)
-                raise NexiUnavailable(_('Nexi non raggiungibile. Riprova.'))
+                _logger.warning('Nexi: response past the deadline: %s', url)
+                raise NexiUnavailable(_('Nexi is unreachable. Try again.'))
             try:
                 if 300 <= (resp.status_code or 0) < 400:
                     _logger.warning(
-                        'Nexi redirect inatteso %s -> %s',
+                        'Nexi unexpected redirect %s -> %s',
                         url, _nexi_sanitize_text(resp.headers.get('Location'), 300),
                     )
-                    raise NexiUnavailable(_('Nexi risposta non valida. Riprova.'))
+                    raise NexiUnavailable(_('Invalid Nexi response. Try again.'))
                 try:
                     raw = _nexi_read_limited(resp, deadline=deadline)
                 except requests.exceptions.RequestException:
-                    _logger.exception('Nexi lettura interrotta: %s', url)
-                    raise NexiUnavailable(_('Nexi non raggiungibile. Riprova.'))
-                # Il resto del metodo usa resp.text/resp.json(): tengo il corpo
-                # già letto (e limitato) nel Response.
+                    _logger.exception('Nexi read interrupted: %s', url)
+                    raise NexiUnavailable(_('Nexi is unreachable. Try again.'))
+                # The rest of the method uses resp.text/resp.json(): keep the
+                # body already read (and capped) in the Response.
                 resp._content = raw
                 resp._content_consumed = True
                 try:
@@ -550,15 +552,14 @@ class PaymentProviderNexi(models.Model):
                     raise NexiApiError(
                         _('Nexi: %s') % _nexi_error_detail(resp),
                         status_code=resp.status_code,
-                        gateway_code=_nexi_error_code(resp),
                     )
                 try:
                     return resp.json() if resp.text else {}
                 except (ValueError, RecursionError, OverflowError):
-                    raise NexiUnavailable(_('Nexi risposta non valida. Riprova.'))
+                    raise NexiUnavailable(_('Invalid Nexi response. Try again.'))
             finally:
                 resp.close()
 
-        # Deadline unico su connect+TLS+header+corpo: il primo livello è qui,
-        # il timeout per-read sopra resta come secondo livello.
+        # One deadline across connect+TLS+headers+body: the first level is
+        # here, the per-read timeout above stays as the second level.
         return _nexi_bounded(call, NEXI_TOTAL_TIMEOUT)

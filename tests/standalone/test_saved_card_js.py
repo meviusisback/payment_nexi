@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""#11 P2: la scelta della carta salvata non deve sbloccare il pagamento
-quando il salvataggio in sessione fallisce.
+"""#11 P2: the saved-card choice must not unblock the payment when saving it
+in the session fails.
 
-Estrae lo script inline dal template e lo esegue in Node con un DOM/fetch
-finti: errore di rete, HTTP negativo e JSON applicativo di errore devono
-lasciare il click su "Paga" bloccato; una risposta positiva invece passa.
+It extracts the inline script from the template and runs it in Node with fake
+DOM/fetch: network error, negative HTTP and application error JSON must leave
+the click on "Pay" blocked; a positive answer lets it through instead.
 """
 import html
 import pathlib
@@ -17,8 +17,8 @@ import unittest
 ADDON_ROOT = pathlib.Path(__file__).resolve().parents[2]
 TEMPLATE = ADDON_ROOT / 'views' / 'payment_nexi_templates.xml'
 
-# Harness Node: espone i globals che il template usa davvero (document,
-# fetch) e simula i tre fallimenti del report.
+# Node harness: exposes the globals the template really uses (document,
+# fetch) and simulates the three failures of the report.
 HARNESS = r'''
 const fs = require('fs');
 const vm = require('vm');
@@ -64,7 +64,7 @@ const okResponse = {ok: true, json: async () => ({result: {ok: true}})};
 const httpError = {ok: false, json: async () => ({})};
 const jsonError = {
   ok: true,
-  json: async () => ({result: {error: 'Sessione scaduta. Ricarica la pagina.'}}),
+  json: async () => ({result: {error: 'Session expired. Reload the page.'}}),
 };
 function networkError() { return Promise.reject(new Error('offline')); }
 function delayed(response, ms) {
@@ -94,15 +94,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 (async () => {
   vm.runInThisContext(code, {filename: 'saved_card.js'});
-  await sleep(40);   // salvataggio iniziale della scelta mostrata
+  await sleep(40);   // initial save of the shown choice
   if (scenario.startsWith('update-')) {
     fetchImpl = scenario === 'update-ok' ? delayed(okResponse, 10) : failure;
     listeners.change({target: changeTarget});
     if (scenario === 'update-ok') {
-      listeners.click(clickEvent());     // pending: deve aspettare e poi passare
+      listeners.click(clickEvent());     // pending: it must wait and then pass
       await sleep(120);
     } else {
-      await sleep(40);                   // l'errore arriva prima del click
+      await sleep(40);                   // the error arrives before the click
       listeners.click(clickEvent());
       await sleep(40);
     }
@@ -111,10 +111,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     await sleep(40);
   }
   if (scenario === 'update-ok') {
-    assert.strictEqual(clickCount, 1, 'una risposta valida deve sbloccare il pagamento');
+    assert.strictEqual(clickCount, 1, 'a valid answer must unblock the payment');
   } else {
-    assert.strictEqual(clickCount, 0, 'il pagamento non deve partire');
-    assert.ok(els['nexi-saved-cards-error'], 'deve comparire un messaggio di errore');
+    assert.strictEqual(clickCount, 0, 'the payment must not start');
+    assert.ok(els['nexi-saved-cards-error'], 'an error message must appear');
     assert.ok(els['nexi-saved-cards-error'].textContent.length > 0);
   }
   console.log('PASS ' + scenario);
@@ -127,10 +127,10 @@ def _saved_card_script():
     for match in re.finditer(r'<script>(.*?)</script>', raw, re.S):
         if 'nexi-saved-card' in match.group(1):
             return html.unescape(match.group(1))
-    raise AssertionError('script della carta salvata non trovato nel template')
+    raise AssertionError('saved-card script not found in the template')
 
 
-@unittest.skipUnless(shutil.which('node'), 'node non installato')
+@unittest.skipUnless(shutil.which('node'), 'node not installed')
 class SavedCardScriptTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

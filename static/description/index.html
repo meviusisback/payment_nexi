@@ -1,39 +1,39 @@
 <html><body>
-<h1>Nexi XPay Web per Odoo 18</h1>
-<p><img src="checkout.png" alt="Scelta del metodo di pagamento alla cassa Odoo, con i loghi dei circuiti"/></p>
-<p>Accetta pagamenti con <strong>Nexi XPay Web</strong> direttamente nella cassa Odoo.
-Due modalità: <em>Hosted Page</em> (redirect alla pagina Nexi) oppure <em>Embedded Build v3</em>
-con i campi carta dentro la cassa. Nessun dato carta viene salvato in Odoo.</p>
+<h1>Nexi XPay Web for Odoo 18</h1>
+<p><img src="checkout.png" alt="Odoo checkout payment method selection with card brand logos"/></p>
+<p>Accept payments with <strong>Nexi XPay Web</strong> directly in the Odoo checkout.
+Two modes: <em>Hosted Page</em> (redirect to the Nexi page) or <em>Embedded Build v3</em>
+with card fields inside the checkout. No card data is stored in Odoo.</p>
 
-<h2>Funzioni</h2>
+<h2>Features</h2>
 <ul>
-  <li>Hosted Page o campi carta incorporati (Build v3).</li>
-  <li>Carta, Google Pay, Apple Pay, Bancomat Pay, MyBank, PayPal e PayPal Paga in 3.</li>
-  <li>Esito sempre verificato lato server su Nexi, con controllo di importo e valuta.</li>
-  <li>Solo il PAN mascherato in Odoo (es. <code>**** 1234</code>).</li>
-  <li>Salvataggio carta (OneClick) opzionale, con consenso del cliente.</li>
-  <li>Pulsante <em>Verifica metodi su Nexi</em> per nascondere i metodi non attivi sul terminale.</li>
+  <li>Hosted Page or embedded card fields (Build v3).</li>
+  <li>Card, Google Pay, Apple Pay, Bancomat Pay, MyBank, PayPal and PayPal Pay in 3.</li>
+  <li>Outcome always verified server-side on Nexi, with amount and currency checks.</li>
+  <li>Only the masked PAN in Odoo (e.g. <code>**** 1234</code>).</li>
+  <li>Optional card saving (OneClick), with customer consent.</li>
+  <li><em>Check methods on Nexi</em> button hides methods the terminal does not enable.</li>
 </ul>
 
-<h2>Configurazione</h2>
+<h2>Configuration</h2>
 <ol>
-  <li>Installa il modulo e apri <em>Fornitori di pagamento → Nexi XPay Web</em>.</li>
-  <li>Inserisci la <code>X-Api-Key</code> del terminale e scegli Test o Produzione.</li>
-  <li>Scegli la modalità: Hosted Page oppure Embedded (serve un URL pubblico HTTPS).</li>
-  <li>Pubblica il provider.</li>
+  <li>Install the module and open <em>Payment Providers → Nexi XPay Web</em>.</li>
+  <li>Enter the terminal <code>X-Api-Key</code> and choose Test or Production.</li>
+  <li>Choose the mode: Hosted Page or Embedded (a public HTTPS URL is required).</li>
+  <li>Publish the provider.</li>
 </ol>
 
-<h2>Prova</h2>
-<p>Usa le carte di test pubblicate da Nexi nella documentazione XPay e completa il 3DS di prova.
-La transazione deve risultare <code>done</code> con esito <code>EXECUTED</code>.</p>
+<h2>Test</h2>
+<p>Use the test cards published by Nexi in the XPay documentation and complete the test 3DS.
+The transaction must end up <code>done</code> with outcome <code>EXECUTED</code>.</p>
 
-<h2>Note</h2>
+<h2>Notes</h2>
 <ul>
-  <li>Solo EUR.</li>
-  <li>Nessun rimborso e nessuna cattura manuale.</li>
-  <li>PayPal Paga in 3 richiede almeno 30 € di ordine.</li>
-  <li>In modalità Embedded i campi carta sono iframe di Nexi e non sono personalizzabili.</li>
+  <li>EUR only.</li>
+  <li>No refunds and no manual capture.</li>
+  <li>PayPal Pay in 3 requires an order of at least €30.</li>
+  <li>In Embedded mode the card fields are Nexi iframes and cannot be customized.</li>
 </ul>
 
-<p>Licenza LGPL-3.</p>
+<p>LGPL-3 license.</p>
 </body></html>

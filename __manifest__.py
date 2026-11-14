@@ -3,12 +3,12 @@
     'name': 'Nexi XPay Web',
     'version': '1.4.10',
     'category': 'Accounting/Payment Providers',
-    'summary': 'Pagamenti Nexi XPay Web: Hosted Page o campi carta in cassa.',
+    'summary': 'Nexi XPay Web payments: Hosted Page or card fields at checkout.',
     'description': """
-Nexi XPay Web per Odoo 18.
-Hosted Page (redirect a Nexi) oppure Embedded Build v3 con i campi carta dentro la cassa.
-Nessun dato carta salvato in Odoo: solo il PAN mascherato.
-Carta, Google Pay, Apple Pay, Bancomat Pay, MyBank, PayPal e PayPal Paga in 3.
+Nexi XPay Web for Odoo 18.
+Hosted Page (redirect to Nexi) or Embedded Build v3 with card fields inside the checkout.
+No card data stored in Odoo: only the masked PAN.
+Card, Google Pay, Apple Pay, Bancomat Pay, MyBank, PayPal and PayPal Pay in 3.
     """,
     'author': 'Alberto',
     'website': 'https://github.com/meviusisback/payment_nexi',

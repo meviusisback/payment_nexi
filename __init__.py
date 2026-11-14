@@ -1,26 +1,24 @@
 # -*- coding: utf-8 -*-
+import base64
+import os
+
 from . import models
 from . import controllers
-from odoo import api, SUPERUSER_ID
+from .models.payment_provider import NEXI_METHOD_CODES
 
 
 def post_init_hook(env):
-    # Crea il provider Nexi se manca. Non tocca mai le scelte dell'admin:
-    # aggiunge solo i metodi mancanti e le immagini vuote.
-    import base64
-    import os
+    # Create the Nexi provider if it is missing. It never touches the admin
+    # choices: it only adds the missing methods and the empty images.
     Provider = env['payment.provider'].sudo()
     Method = env['payment.method'].sudo()
-    codes = [
-        'card', 'googlepay', 'applepay', 'bancomatpay', 'mybank', 'paypal', 'paypal_bnpl',
-        'visa', 'mastercard', 'amex',
-    ]
-    # I metodi del core (card, paypal, mybank, visa, mastercard, amex) restano
-    # spenti finché l'admin non abilita il provider: è Odoo ad accenderli
-    # (provider._activate_default_pms), e solo se sono già collegati. Su un DB
-    # pulito `Method.search` con active_test=True li salterebbe tutti e la
-    # nuova installazione non offrirebbe le carte: qui i record inattivi
-    # devono essere collegati, poi sarà Odoo ad attivarli.
+    codes = NEXI_METHOD_CODES
+    # The core methods (card, paypal, mybank, visa, mastercard, amex) stay off
+    # until the admin enables the provider: Odoo is the one that turns them on
+    # (provider._activate_default_pms), and only if they are already linked. On
+    # a clean database `Method.search` with active_test=True would skip them all
+    # and a new install would not offer the cards: here the inactive records
+    # must be linked, then Odoo activates them.
     methods = Method.with_context(active_test=False).search([('code', 'in', codes)])
     existing = Provider.search([('code', '=', 'nexi')])
     if not existing:
@@ -33,8 +31,8 @@ def post_init_hook(env):
             'payment_method_ids': [(6, 0, methods.ids)] if methods else False,
         })
     else:
-        # Per provider, non sull'unione: un terminale già completo non deve
-        # nascondere i metodi mancanti di un altro (search multi-record).
+        # Per provider, not on the union: a complete terminal must not hide the
+        # methods missing on another one (multi-record search).
         for provider in existing.with_context(active_test=False):
             have = set(provider.payment_method_ids.ids)
             missing = [m.id for m in methods if m.id not in have]
@@ -42,13 +40,13 @@ def post_init_hook(env):
                 provider.write({'payment_method_ids': [(4, i) for i in missing]})
     for provider in existing:
         if provider.state != 'disabled':
-            # Provider già attivo: accende i brand e mette per primi i loro
-            # loghi. Uno per uno: possono esserci più terminali Nexi.
+            # Provider already active: turn the brands on and put their logos
+            # first. One by one: there can be several Nexi terminals.
             provider._activate_default_pms()
     base = os.path.join(os.path.dirname(__file__), 'static', 'src', 'img')
-    # Anche i brand core (visa/mastercard/amex): il file è lo stesso di Odoo,
-    # ma su DB vecchi l'immagine può essere vuota e senza di essa la riga
-    # Carta perde le icone dei circuiti.
+    # The core brands too (visa/mastercard/amex): the file is the same as
+    # Odoo, but on old databases the image can be empty and without it the
+    # Card row loses the scheme icons.
     for code in codes:
         path = os.path.join(base, code + '.png')
         if not os.path.isfile(path):
