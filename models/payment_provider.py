@@ -442,13 +442,37 @@ class PaymentProviderNexi(models.Model):
         base = NEXI_SANDBOX_BASE if self.nexi_env == 'test' else NEXI_PROD_BASE
         return base + '/monetaweb/resources/hfsdk.js'
 
+    def _nexi_eur_currency(self):
+        """The EUR currency record, active or not."""
+        return self.env['res.currency'].with_context(active_test=False).search(
+            [('name', '=', 'EUR')], limit=1)
+
     def _get_supported_currencies(self):
         # The Nexi sandbox wants EUR. Keep EUR only, but only for Nexi: the
         # other providers on the same shop must not be limited.
         self.ensure_one()
         if self.code != 'nexi':
             return super()._get_supported_currencies()
-        return self.env['res.currency'].with_context(active_test=False).search([('name', '=', 'EUR')])
+        return self._nexi_eur_currency()
+
+    def _get_compatible_providers(self, company_id, partner_id, amount, currency_id=None, **kwargs):
+        """Never offer Nexi for a currency it cannot charge.
+
+        `available_currency_ids` is stored and recomputed only when `code`
+        changes, so a provider created before the EUR-only rule (or edited by
+        hand) can still list every currency: the checkout would then offer Nexi
+        for a USD cart and fail when the redirect is rendered. The rule is
+        enforced here as well, whatever the stored field says.
+        """
+        providers = super()._get_compatible_providers(
+            company_id, partner_id, amount, currency_id=currency_id, **kwargs)
+        if not currency_id:
+            return providers
+        currency = self.env['res.currency'].browse(currency_id).exists()
+        if not currency:
+            return providers
+        return providers.filtered(
+            lambda p: p.code != 'nexi' or currency in p._get_supported_currencies())
 
     def _get_default_payment_method_codes(self):
         self.ensure_one()

@@ -1217,3 +1217,43 @@ class TestNexiReview(TransactionCase):
         self.assertIn(
             self.method_card, both,
             'the row uses the second terminal, which accepts the card')
+
+    def test_nexi_is_never_offered_outside_eur(self):
+        """A stale currency list must not offer Nexi for a USD cart.
+
+        `available_currency_ids` is stored and recomputed only on a `code`
+        change: a provider created before the EUR-only rule still lists every
+        currency, and the checkout used to offer Nexi and then fail with
+        "Nexi supports EUR only.".
+        """
+        usd = self.env['res.currency'].with_context(active_test=False).search(
+            [('name', '=', 'USD')], limit=1)
+        self.assertTrue(usd, 'USD currency missing in the test database')
+        eur = self.provider._nexi_eur_currency()
+        self.assertTrue(eur, 'EUR currency missing in the test database')
+        self.provider.write({'available_currency_ids': [(6, 0, [])]})
+        Provider = self.env['payment.provider']
+        with_usd = Provider._get_compatible_providers(
+            self.provider.company_id.id, self.partner.id, 10.0, usd.id)
+        with_eur = Provider._get_compatible_providers(
+            self.provider.company_id.id, self.partner.id, 10.0, eur.id)
+        self.assertNotIn(self.provider, with_usd)
+        self.assertIn(self.provider, with_eur)
+
+    def test_migration_bounds_currencies_to_eur(self):
+        """#17: 1.4.11 sets the Nexi currencies to EUR, stale providers included."""
+        self.provider.write({'available_currency_ids': [(6, 0, [])]})
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            'nexi_migrate_1411', self._migration_script('1.4.11'),
+        )
+        migrate_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(migrate_mod)
+        migrate_mod.migrate(self.env.cr, '1.4.11')
+        self.provider.invalidate_recordset()
+        self.assertEqual(
+            self.provider.available_currency_ids, self.provider._nexi_eur_currency())
+        # Second run: no-op.
+        migrate_mod.migrate(self.env.cr, '1.4.11')
+        self.assertEqual(
+            self.provider.available_currency_ids, self.provider._nexi_eur_currency())

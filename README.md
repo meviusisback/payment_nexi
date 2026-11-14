@@ -73,7 +73,7 @@ Notes:
 - Odoo 18 with the `payment`, `website` and `website_sale` modules (the module's `depends`).
 - Python package `requests` (external dependency).
 - A Nexi XPay Web terminal with its `X-Api-Key` (the test keys are the ones published by Nexi in the XPay documentation — never commit them to the repository).
-- Currency **EUR** (Nexi rejects the others).
+- Currency **EUR**: Nexi rejects the others, and the currency of the **checkout** (i.e. the website pricelist) must be EUR. The company currency can be anything: a USD company that sells in EUR works, a USD-priced website does not (see [Currency](#currency)).
 - A **public URL** for Embedded mode: Nexi does not accept `localhost`.
 
 ## Configuration
@@ -90,6 +90,15 @@ Notes:
 | Check methods on Nexi | Tests the terminal and stores the result **for this provider only** |
 
 Cards are per terminal: a contract created on one Nexi provider is not offered on another one.
+
+### Currency
+
+Nexi only accepts **EUR**, so the module declares EUR as its only supported currency (`_get_supported_currencies`). Odoo picks the currency of a payment from the **order**, which takes it from the **pricelist** of the website: that is the currency that has to be EUR.
+
+- Company currency USD + website pricelist EUR → works: the order is in EUR and Nexi is offered.
+- Website pricelist USD (or any non-EUR pricelist) → Nexi is **not offered at checkout at all**. Odoo filters the providers by currency, so there is no error to read: the row simply is not there. Forcing a transaction in another currency (scripts, direct calls) stops with `Nexi supports EUR only.` — the module never sends a non-EUR amount to Nexi.
+
+There is no automatic conversion: a USD order is not converted to EUR at payment time. To take Nexi payments, set a EUR pricelist on the website (*Website → Configuration → Settings → Shop → Pricelist*, or the pricelist on the site record): the prices are then computed in EUR like for any other currency.
 
 Behind a reverse proxy or load balancer, Odoo must see the real client address: set `proxy_mode = True` in `odoo.conf` and let the proxy sanitize `X-Forwarded-For` (Odoo 18 trusts the first entry with no allowlist). Otherwise all Nexi notifications share one rate-limit bucket per worker and a busy shop can starve the others with legitimate `429`s.
 

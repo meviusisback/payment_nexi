@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 {
     'name': 'Nexi XPay Web',
-    'version': '1.4.10',
+    'version': '1.4.11',
     'category': 'Accounting/Payment Providers',
     'summary': 'Nexi XPay Web payments: Hosted Page or card fields at checkout.',
     'description': """
