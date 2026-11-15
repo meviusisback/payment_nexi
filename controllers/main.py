@@ -424,7 +424,10 @@ class NexiController(http.Controller):
         tx.invalidate_recordset()
         if tx.is_post_processed and tx.state in ('done', 'cancel', 'error'):
             # Already closed and post-processed by another flow: neither the
-            # verification nor the confirmation is repeated.
+            # verification nor the confirmation is repeated. The *sibling* order
+            # of the same payment must not settle unseen, though: it is probed
+            # and, if money moved, logged as a manual check.
+            tx._nexi_flag_second_settlement(ref_in)
             _logger.info('Nexi %s already closed and post-processed: skipping.', tx.reference)
         else:
             try:
@@ -470,6 +473,9 @@ class NexiController(http.Controller):
             'confirm_url': f'/payment/nexi/confirm?ref={tx.reference}&tok={tok}',
         })
         response.headers['Referrer-Policy'] = 'no-referrer'
+        # The tok is in the URL: no shared cache may keep or replay the page.
+        response.headers['Cache-Control'] = 'no-store, private'
+        response.headers['Pragma'] = 'no-cache'
         return response
 
     @http.route('/payment/nexi/build/prepare', type='json', auth='public', website=True, methods=['POST'], csrf=True)
@@ -695,7 +701,9 @@ class NexiController(http.Controller):
             })
         return request.make_response(
             json.dumps({'state': (data or {}).get('state'), 'fields': out}),
-            [('Content-Type', 'application/json')],
+            [('Content-Type', 'application/json'),
+             ('Cache-Control', 'no-store, private'),
+             ('Pragma', 'no-cache')],
         )
 
     @http.route('/payment/nexi/build/<string:reference>/finalize', type='json', auth='public', methods=['POST'], csrf=True)

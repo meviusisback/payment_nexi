@@ -110,6 +110,8 @@ def _nexi_lock_row(cr, tx_id, nowait=True):
     as the network. The savepoint keeps the transaction usable when the lock is
     not available. One place for confirmation and cron, so they cannot diverge.
     """
+    from psycopg2.errors import LockNotAvailable
+
     sql = (
         'SELECT id FROM payment_transaction WHERE id = %s FOR UPDATE'
         + (' NOWAIT' if nowait else '')
@@ -117,7 +119,14 @@ def _nexi_lock_row(cr, tx_id, nowait=True):
     try:
         with cr.savepoint():
             cr.execute(sql, (tx_id,))
+    except LockNotAvailable:
+        # Another flow owns the row: the expected case, handled by the caller.
+        return False
     except Exception:
+        # A deadlock, a serialization failure or a broken connection is NOT
+        # contention: it must be visible, or the transaction is skipped in
+        # silence until the next cron round.
+        _logger.exception('Nexi: lock on transaction %s failed', tx_id)
         return False
     return True
 
@@ -174,6 +183,12 @@ class PaymentTransactionNexi(models.Model):
         string='Last Nexi outcome', readonly=True, copy=False)
     nexi_last_captured = fields.Integer(
         string='Last captured (cents)', readonly=True, default=0, copy=False)
+    # Which of the transaction's Nexi orders closed it: in Build mode one
+    # payment has two (the reference and its -m sibling), and a second
+    # settlement after the close must not disappear.
+    nexi_settled_order = fields.Char(
+        string='Settling Nexi order', readonly=True, copy=False,
+        groups='base.group_system')
 
     def _nexi_family_ids(self, partner_id):
         """Partner + linked contacts: the contract is valid for the whole family."""
@@ -363,7 +378,7 @@ class PaymentTransactionNexi(models.Model):
                           'nexi_access_token',
                           'nexi_reconcile_count', 'nexi_uncertain',
                           'nexi_reverify_count', 'nexi_last_result',
-                          'nexi_last_captured'):
+                          'nexi_last_captured', 'nexi_settled_order'):
                     vals.pop(f, None)
             if not vals.get('nexi_access_token'):
                 vals['nexi_access_token'] = secrets.token_urlsafe(32)
@@ -376,7 +391,7 @@ class PaymentTransactionNexi(models.Model):
                                'nexi_access_token',
                                'nexi_reconcile_count', 'nexi_uncertain',
                                'nexi_reverify_count', 'nexi_last_result',
-                               'nexi_last_captured')
+                               'nexi_last_captured', 'nexi_settled_order')
                    if f in (vals or {})]
             if bad:
                 raise AccessError(_('Only the system can write Nexi data.'))
@@ -501,7 +516,13 @@ class PaymentTransactionNexi(models.Model):
                     'Nexi uses a candidate base: set the Shop public base.')
                 base = _nexi_clean_base_url(cand)
         if not base:
-            base = (self.get_base_url() or '').rstrip('/')
+            # No clean https base: the tok must not travel in clear (or to a
+            # host the shop does not own), so the checkout stops and the admin
+            # fixes the setting instead of a silent plaintext payment.
+            raise ValidationError(_(
+                'Nexi needs a public HTTPS URL: set the Shop public base '
+                '(or web.base.url) to the shop https address.'
+            ))
         suffix = processing_values.get('order_suffix') or ''
         if not self.nexi_access_token:
             self.sudo().nexi_access_token = secrets.token_urlsafe(32)
@@ -740,6 +761,43 @@ class PaymentTransactionNexi(models.Model):
             return None
         return verdict(
             order_ref, data, to_cents(self.amount), self.currency_id.name)
+
+    def _nexi_flag_second_settlement(self, order_ref):
+        """Alert when a *second* Nexi order settled after the transaction closed.
+
+        One payment has two orders in Build mode (`reference` and its `-m`
+        sibling). If the first one closed the transaction, a settlement of the
+        other one would otherwise vanish: the confirmation route skips a closed
+        transaction, the cron does not look at closed ones, and the money taken
+        would be invisible. Read-only on the gateway, log only.
+        """
+        self.ensure_one()
+        if not order_ref:
+            return None
+        if order_ref == (self.nexi_settled_order or self.reference):
+            # The order that closed it: a retried notification, nothing new.
+            return None
+        probe = self._nexi_probe_outcome(order_ref)
+        if not probe:
+            return None
+        money_taken = (
+            probe.kind == DONE
+            or (
+                probe.kind == ERROR
+                and probe.reason != INVALID_ORDER
+                and (probe.captured_cents or 0) > 0
+            )
+        )
+        if not money_taken:
+            return None
+        _logger.error(
+            'Nexi %s: order %s settled after the transaction was already %s '
+            '(%s, captured %s cents vs expected %s): a second payment must be '
+            'checked and refunded by hand.',
+            self.reference, order_ref, self.state, probe.reason,
+            probe.captured_cents or 0, probe.expected_cents,
+        )
+        return probe
 
     @api.model
     def _nexi_reconcile_pending(self, limit=20):
@@ -1051,9 +1109,9 @@ class PaymentTransactionNexi(models.Model):
             outcome = verdict(order_ref, data, expected, currency)
             if outcome.reason == INVALID_ORDER:
                 # The answer is about another order (or names none at all):
-                # there is nothing to read and no field to write about it.
-                self._nexi_uncertain_error(
-                    _('Invalid Nexi return.'), outcome.captured_cents)
+                # there is nothing to read and no field to write about it, and
+                # its figures are not this transaction's.
+                self._nexi_uncertain_error(_('Invalid Nexi return.'))
                 return
             if not outcome.retry:
                 break
@@ -1063,11 +1121,23 @@ class PaymentTransactionNexi(models.Model):
                 time.sleep(1.0)
         # What the gateway last said, even when the outcome is an error: the
         # diagnostic fields are not part of the decision.
+        last_captured = outcome.captured_cents or 0
+        if not 0 <= last_captured <= 2 ** 31 - 1:
+            # nexi_last_captured is an int4 column: an absurd figure must not
+            # raise on flush. It is diagnostic only, the log keeps the value.
+            _logger.error(
+                'Nexi %s: captured figure out of range: %s cents',
+                self.reference, last_captured)
+            last_captured = 0
         self.sudo().write({
             'nexi_last_result': (outcome.operation_result or '')[:32] or False,
-            'nexi_last_captured': outcome.captured_cents or 0,
+            'nexi_last_captured': last_captured,
         })
         self._nexi_apply_verdict(outcome)
+        if self.state in ('done', 'cancel', 'error'):
+            # Which of the transaction's Nexi orders closed it: the sibling
+            # order settling later must not go unnoticed.
+            self.sudo().write({'nexi_settled_order': order_ref})
 
     def _send_refund_request(self, amount_to_refund=None, create_refund_transaction=True):
         self.ensure_one()

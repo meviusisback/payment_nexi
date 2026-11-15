@@ -442,6 +442,11 @@
              (KeyError at every checkout load). Same expression as Odoo. -->
         <t t-set="nexi_row_prov" t-value="pm_sudo.provider_ids.filtered(lambda p: p in providers_sudo)[:1]"/>
         <t t-if="nexi_prov and nexi_prov.nexi_mode == 'build' and nexi_row_prov.code == 'nexi'">
+          <!-- Shopper texts of the embedded panel. `nexi_ui` set inside
+               payment.method_form does NOT reach this template (the t-set is
+               local to the called template), and `nexi_ui['…']` on an undefined
+               name is a QWeb error, not an empty string: define it here. -->
+          <t t-set="nexi_ui" t-value="request.env['payment.transaction'].sudo()._nexi_ui_strings()"/>
           <t t-if="pm_sudo.code == 'card'">
             <style>
               /* Build: every Nexi row is a grey pill with logo + name, without

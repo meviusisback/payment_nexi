@@ -541,6 +541,140 @@ class TestNexiReview(TransactionCase):
         tx.invalidate_recordset()
         self.assertEqual(tx.state, 'done')
 
+    def test_build_checkout_form_renders_the_panel(self):
+        """`nexi_ui` must be defined in payment.form scope: QWeb 500 otherwise."""
+        from odoo.http import _request_stack
+        self.provider.write({'nexi_mode': 'build', 'state': 'test', 'is_published': True})
+        tx = self._new_tx()
+
+        class _Req:
+            def __init__(self, env):
+                self.env = env
+                self.website = None
+                self.params = {}
+                self.session = type('S', (), {'debug': ''})()
+                self.httprequest = None
+
+            def csrf_token(self):
+                return 'csrf-probe'
+
+        _request_stack.push(_Req(self.env))
+        try:
+            html = self.env['ir.qweb']._render('payment.form', {
+                'mode': 'payment',
+                'amount': 10.0,
+                'currency': self.currency_eur or tx.currency_id,
+                'partner_id': self.partner.id,
+                'providers_sudo': self.provider.sudo(),
+                'payment_methods_sudo': self.method_card.sudo(),
+                'tokens_sudo': self.env['payment.token'].sudo().browse(),
+                'reference_prefix': tx.reference,
+                'transaction_route': '/payment/transaction',
+                'assign_token_route': '/payment/token',
+                'landing_route': '/shop/payment/validate',
+                'access_token': tx.nexi_access_token,
+                'is_html_empty': lambda v: not v,
+                'show_tokenize_input_mapping': {self.provider.id: False},
+            })
+        finally:
+            _request_stack.pop()
+        self.assertIn('nexi-inline', html)
+        self.assertIn('data-strings', html)
+
+    def test_second_settlement_is_flagged(self):
+        """A sibling order paid after the close must not vanish silently."""
+        tx = self._new_tx()
+        tx._set_done()
+        tx.write({'nexi_settled_order': tx.reference})
+        paid = self._nexi_answer(
+            tx.reference + '-m', 1000,
+            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
+        )
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=paid):
+            with self.assertLogs(
+                'odoo.addons.payment_nexi.models.payment_transaction',
+                level='ERROR',
+            ) as logs:
+                tx._nexi_flag_second_settlement(tx.reference + '-m')
+        self.assertTrue(
+            any('second payment' in line for line in logs.output),
+            'the surplus settlement must be reported for a manual refund',
+        )
+        self.assertEqual(tx.state, 'done', 'the first payment stays closed')
+
+    def test_settling_order_is_not_flagged_again(self):
+        """A retried notification of the order that closed it is not money."""
+        tx = self._new_tx()
+        tx._set_done()
+        tx.write({'nexi_settled_order': tx.reference + '-m'})
+        paid = self._nexi_answer(
+            tx.reference + '-m', 1000,
+            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
+        )
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=paid):
+            with self.assertNoLogs(
+                'odoo.addons.payment_nexi.models.payment_transaction',
+                level='ERROR',
+            ):
+                tx._nexi_flag_second_settlement(tx.reference + '-m')
+
+    def test_method_check_is_system_only(self):
+        """The button is on a system form, but call_kw does not check ACL."""
+        from odoo.exceptions import AccessError
+        portal = self.env['res.users'].create({
+            'name': 'Nexi portal probe',
+            'login': 'nexi_portal_probe',
+            'groups_id': [(6, 0, [self.env.ref('base.group_portal').id])],
+        })
+        with self.assertRaises(AccessError):
+            self.provider.with_user(portal).button_nexi_check_methods()
+
+    def test_no_public_https_base_is_refused(self):
+        """The tok must not travel to a plaintext or unconfigured base."""
+        self.env['ir.config_parameter'].sudo().set_param(
+            'web.base.url', 'http://localhost:8069')
+        self.provider.nexi_public_base = False
+        tx = self._new_tx()
+        with self.assertRaisesRegex(ValidationError, 'public HTTPS'):
+            tx._get_specific_rendering_values({
+                'amount': 10.0, 'currency_id': tx.currency_id.id,
+                'partner_id': self.partner.id, 'reference': tx.reference,
+                'should_tokenize': False,
+            })
+
+    def test_absurd_captured_figure_does_not_crash(self):
+        """A figure above int4 is logged and never written to the diagnostic."""
+        tx = self._new_tx()
+        data = self._nexi_answer(
+            tx.reference, 3000000000,
+            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
+        )
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
+            with self.assertLogs(
+                'odoo.addons.payment_nexi.models.payment_transaction',
+                level='ERROR',
+            ) as logs:
+                tx._process_notification_data({})
+        self.assertEqual(tx.state, 'error')
+        self.assertEqual(tx.nexi_last_captured, 0)
+        self.assertTrue(
+            any('out of range' in line for line in logs.output),
+            'the real figure must stay visible in the log',
+        )
+
+    def test_foreign_order_answer_does_not_store_captured(self):
+        """A figure taken from another order is not this transaction's."""
+        tx = self._new_tx()
+        data = self._nexi_answer(
+            'OTHERORDER', 5000,
+            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
+        )
+        with patch.object(type(self.provider), '_nexi_make_request', return_value=data):
+            tx._process_notification_data({})
+        self.assertEqual(tx.state, 'error')
+        self.assertTrue(tx.nexi_uncertain)
+        self.assertEqual(tx.nexi_last_captured, 0)
+
     def test_reconcile_surfaces_buttons_order_overpay(self):
         """A buttons order paid twice must reach the manual check, not vanish."""
         from datetime import timedelta

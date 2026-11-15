@@ -102,6 +102,8 @@ There is no automatic conversion: a USD order is not converted to EUR at payment
 
 Behind a reverse proxy or load balancer, Odoo must see the real client address: set `proxy_mode = True` in `odoo.conf` and let the proxy sanitize `X-Forwarded-For` (Odoo 18 trusts the first entry with no allowlist). Otherwise all Nexi notifications share one rate-limit bucket per worker and a busy shop can starve the others with legitimate `429`s.
 
+The public base used for the return URLs must be **https** (the *Shop public base* field, or `web.base.url`): with an `http` or localhost base the payment stops with a clear error instead of sending the per-transaction return token over a plaintext link.
+
 ## How it works
 
 Every transaction carries a random code (`tok`): without the right code the public routes answer "not found" without touching Nexi or the payment. On JSON routes the code travels in the `X-Nexi-Token` header (the query string remains for Nexi return URLs and old links), and the Build page sends `Referrer-Policy: no-referrer`; strip `tok` from reverse-proxy access logs. The JSON write routes validate the session CSRF token explicitly, because Odoo 18 does not enforce `csrf=True` on the JSON dispatcher. The order to verify is decided by the transaction, never by the caller; the Nexi response must refer to the same order, and the amount is compared in cents. Nexi data (`contractId`, sessions, masked PAN) is written by the system only — external writes via RPC are rejected. Saved cards are visible to the owner **and to the other contacts of the same company** (the contract belongs to the commercial partner). Nexi notifications are counted per transaction, browser returns per IP; only generic messages reach the browser, details stay in the server logs.

@@ -7,3 +7,6 @@ venv/
 .idea/
 .vscode/
 .DS_Store
+# Raw gateway answers may carry cardholder name/email and masked PAN: never
+# commit them. Redact/anonymize before adding a fixture.
+tests/fixtures/

@@ -19,7 +19,7 @@ about money, so it must be testable with a plain python and a dict.
 """
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 
 # Nexi outcomes. EXECUTED = paid (automatic). AUTHORIZED = only blocked.
 OK_RESULTS = {'EXECUTED'}
@@ -90,12 +90,19 @@ def to_cents(amount):
         if not value.is_finite():
             return 0
         return int((value * 100).to_integral_value())
-    except (InvalidOperation, ValueError, TypeError, OverflowError):
+    except (ArithmeticError, ValueError, TypeError):
+        # ArithmeticError covers decimal.InvalidOperation and decimal.Overflow,
+        # which is NOT an OverflowError.
         return 0
 
 
 def is_paid(operation_result):
     return operation_result in OK_RESULTS
+
+
+# Money figures above this are not amounts (10^12 cents = 10 billion EUR) and
+# are what a malformed answer uses to blow up Decimal: refused before use.
+MAX_CENTS = 10 ** 12
 
 
 def parse_cents(value):
@@ -109,23 +116,29 @@ def parse_cents(value):
     try:
         text = str(value).strip()
         d = Decimal(text)
-    except (InvalidOperation, ValueError, TypeError, OverflowError):
+    except (ArithmeticError, ValueError, TypeError):
         return None
     # Decimal accepts 'Infinity' and 'NaN': they are not amounts, and int() on
     # Infinity would raise OverflowError up to a 500.
     if not d.is_finite():
         return None
+    # '1e1000000' is finite but its *100 overflows the decimal context with an
+    # exception the route does not catch: refuse it before converting.
+    if d.adjusted() > 15:
+        return None
     if '.' in text or 'e' in text.lower():
         try:
-            return int((d * 100).to_integral_value())
-        except (InvalidOperation, ValueError, TypeError, OverflowError):
+            got = int((d * 100).to_integral_value())
+        except (ArithmeticError, ValueError, TypeError):
             return None
-    try:
-        if d != d.to_integral_value():
+    else:
+        try:
+            if d != d.to_integral_value():
+                return None
+            got = int(d)
+        except (ArithmeticError, ValueError, TypeError):
             return None
-        return int(d)
-    except (InvalidOperation, ValueError, TypeError, OverflowError):
-        return None
+    return got if abs(got) <= MAX_CENTS else None
 
 
 def op_time(op):
@@ -151,13 +164,19 @@ def op_ts(op):
         return None
 
 
-def latest_operation(data, types):
-    """Latest operation of the given type, by date, in the Nexi response."""
+def latest_operation(data, types, results=None):
+    """Latest operation of the given type, by date, in the Nexi response.
+
+    With ``results`` given, only operations whose result is in that set count
+    (e.g. the latest CAPTURE that really executed).
+    """
     data = data if isinstance(data, dict) else {}
     operations = data.get('operations')
     ops = [
         o for o in (operations if isinstance(operations, list) else [])
         if isinstance(o, dict) and str(o.get('operationType') or '').upper() in types
+        and (results is None
+             or str(o.get('operationResult') or '').upper() in results)
     ]
     if not ops:
         return {}
@@ -301,9 +320,9 @@ def reversed_after_capture(data, capture_op, currency=None):
         amount = parse_cents(item.get('operationAmount'))
         if amount is None:
             amount = parse_cents(item.get('capturedAmount'))
-        if amount is None:
-            # A reversal with no readable figure: the capture cannot be
-            # considered live.
+        if amount is None or amount <= 0:
+            # A reversal with no readable (or non-positive) figure: the capture
+            # cannot be considered live.
             return None
         total += amount
     return total
@@ -401,7 +420,8 @@ def _paid(data, op, decided_by, result, expected_cents, currency, captured):
         return Verdict(ERROR, AMOUNT_MISMATCH, expected_cents, captured,
                        decided_by, result, None)
     returned = reversed_after_capture(
-        data, latest_operation(data, CAPTURE_OPS), currency=currency)
+        data, latest_operation(data, CAPTURE_OPS, OK_RESULTS),
+        currency=currency)
     if returned is None or returned >= total:
         # The capture was given back, or the reversal cannot be sized: the
         # money is not in. The verdict cannot depend on whether a later
@@ -417,18 +437,32 @@ def _declined(data, result, expected_cents, currency, captured):
     # Here only the captures really executed count: a declined CAPTURE carries
     # an amount that was never taken.
     taken = capture_total(data, None, currency=currency)
-    capture_op = latest_operation(data, CAPTURE_OPS)
-    # Only a capture nothing gave back is still standing: a partial refund
-    # leaves it, a full (or unsizable) one does not.
-    live_capture = reversed_after_capture(data, capture_op, currency=currency) == 0
-    if result not in ('REFUNDED', 'VOIDED') and taken is not None:
-        if live_capture and taken == expected_cents:
-            # Capture already executed: a later decline (a new attempt of the
-            # same order) does not undo the money taken.
-            return Verdict(DONE, ALREADY_CAPTURED, expected_cents, captured,
+    # The reversal window is anchored to the last capture that really took
+    # money: a later *declined* capture must not hide a refund that came
+    # between the two.
+    capture_op = latest_operation(data, CAPTURE_OPS, OK_RESULTS)
+    executed_capture = bool(capture_op)
+    returned = reversed_after_capture(data, capture_op, currency=currency)
+    # A partial refund leaves the capture standing, a full (or unsizable) one
+    # does not: the same rule the paid path uses, so the outcome cannot depend
+    # on whether a later attempt happened to be declined.
+    live_capture = (
+        returned is not None and taken is not None and returned < taken)
+    if result not in ('REFUNDED', 'VOIDED'):
+        if taken is None and executed_capture:
+            # A capture says EXECUTED but its figure cannot be read: the money
+            # may be in. Never a silent cancel, the cron rechecks and then a
+            # human looks (same policy as the paid path).
+            return Verdict(ERROR, CAPTURE_INCOMPLETE, expected_cents, captured,
                            'capture', result, None)
-        if live_capture and taken > expected_cents:
-            return Verdict(ERROR, AMOUNT_MISMATCH, expected_cents, captured,
-                           'capture', result, None)
+        if taken is not None and live_capture:
+            if taken == expected_cents:
+                # Capture already executed: a later decline (a new attempt of
+                # the same order) does not undo the money taken.
+                return Verdict(DONE, ALREADY_CAPTURED, expected_cents, captured,
+                               'capture', result, None)
+            if taken > expected_cents:
+                return Verdict(ERROR, AMOUNT_MISMATCH, expected_cents, captured,
+                               'capture', result, None)
     return Verdict(CANCEL, DECLINED, expected_cents, captured, 'capture',
                    result, None)

@@ -150,6 +150,24 @@ CASES = [
         op('CAPTURE', 'EXECUTED', '2026-11-14T10:00:05'),
         op('REFUND', 'EXECUTED', '2026-11-14T11:00:00')])),
      V.CANCEL, V.REVERSED, False, 1000, None, False),
+    ('refund_hidden_by_later_declined_capture', answer(1000, [
+        op('CAPTURE', 'EXECUTED', '2026-11-14T10:00:05'),
+        op('REFUND', 'EXECUTED', '2026-11-14T11:00:00'),
+        op('CAPTURE', 'DECLINED', '2026-11-14T12:00:00')]),
+     V.CANCEL, V.DECLINED, False, 1000, None, False),
+    ('negative_refund', answer(1000, [
+        op('CAPTURE', 'EXECUTED', '2026-11-14T10:00:05'),
+        op('REFUND', 'EXECUTED', '2026-11-14T11:00:00', amount='-1000')]),
+     V.CANCEL, V.REVERSED, False, 1000, None, False),
+    ('partial_refund_then_decline', answer(1000, [
+        op('CAPTURE', 'EXECUTED', '2026-11-14T10:00:05'),
+        op('REFUND', 'EXECUTED', '2026-11-14T11:00:00', amount='300'),
+        op('AUTHORIZATION', 'DENIED_BY_RISK', '2026-11-14T12:00:00')]),
+     V.DONE, V.ALREADY_CAPTURED, False, 1000, None, False),
+    ('capture_without_amount_then_decline', answer(None, [
+        op('CAPTURE', 'EXECUTED', '2026-11-14T10:00:05', amount=''),
+        op('AUTHORIZATION', 'DENIED_BY_RISK', '2026-11-14T12:00:00')]),
+     V.ERROR, V.CAPTURE_INCOMPLETE, True, None, None, False),
     ('capture_pending', answer(None, [
         op('CAPTURE', 'PENDING', '2026-11-14T10:00:05')]),
      V.PENDING, V.SCHEME_PENDING, False, 1000, None, True),
@@ -233,7 +251,8 @@ class AmountsTest(unittest.TestCase):
         self.assertEqual(V.parse_cents('1e2'), 10000)
 
     def test_junk_is_none(self):
-        for value in (None, '', 'abc', 'Infinity', 'NaN', '10.005.1'):
+        for value in (None, '', 'abc', 'Infinity', 'NaN', '10.005.1',
+                      '1e1000000', '1e999999999', '9' * 40):
             with self.subTest(value=value):
                 self.assertIsNone(V.parse_cents(value))
 

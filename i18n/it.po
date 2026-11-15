@@ -453,6 +453,12 @@ msgid "Nexi is unreachable. Try again."
 msgstr "Nexi non raggiungibile. Riprova."
 
 #. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Nexi needs a public HTTPS URL: set the Shop public base (or web.base.url) to the shop https address."
+msgstr "Nexi richiede un indirizzo pubblico HTTPS: imposta la Base pubblica del negozio (o web.base.url) sull'indirizzo https del negozio."
+
+#. module: payment_nexi
 #: model:ir.model,name:payment_nexi.model_payment_nexi_method_availability
 msgid "Nexi methods per terminal"
 msgstr "Metodi Nexi per terminale"
@@ -542,6 +548,12 @@ msgstr "OneClick CIT"
 #: model:ir.model.fields,field_description:payment_nexi.field_payment_transaction__nexi_contract_id
 msgid "OneClick contract"
 msgstr "Contratto OneClick"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_provider.py:0
+msgid "Only the system can check the Nexi methods."
+msgstr "Solo il sistema può verificare i metodi Nexi."
 
 #. module: payment_nexi
 #. odoo-python
