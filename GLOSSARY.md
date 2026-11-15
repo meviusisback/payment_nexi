@@ -27,7 +27,10 @@ an AUTHORIZATION and a CAPTURE; the capture is the one that says the payment
 is in.
 
 **Reversal** — a VOID or a REFUND after a capture. A capture already executed is
-not undone by a later decline; it is undone by a reversal.
+not undone by a later decline. A reversal that covers the whole capture, or
+whose amount cannot be read, means the money is not in: the verdict cancels
+(`reversed`). A partial reversal leaves the payment standing. Measured by
+`reversed_after_capture` in `models/nexi_verdict.py`.
 
 ## Outcome concepts
 

@@ -14,7 +14,7 @@ import unittest
 
 _MODULE_PATH = pathlib.Path(__file__).resolve().parents[2] / 'models' / 'nexi_verdict.py'
 _spec = importlib.util.spec_from_file_location('nexi_verdict', _MODULE_PATH)
-assert _spec and _spec.loader, 'nexi_verdict.py non trovato'
+assert _spec and _spec.loader, 'nexi_verdict.py not found'
 V = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(V)
 
@@ -74,6 +74,15 @@ def strip_dates(data):
     return data
 
 
+def strip_reversal_amount(data):
+    """Drop the figures of the REFUND/VOID operations only."""
+    for item in data['operations']:
+        if item['operationType'] in ('REFUND', 'VOID'):
+            item.pop('operationAmount', None)
+            item.pop('capturedAmount', None)
+    return data
+
+
 PAN = '************1234'
 
 CASES = [
@@ -127,12 +136,20 @@ CASES = [
      V.CANCEL, V.DECLINED, False, 1000, None, False),
     ('refunded_after_capture', answer(1000, [
         op('CAPTURE', 'EXECUTED', '2026-11-14T10:00:05'),
-        op('REFUND', 'REFUNDED', '2026-11-14T11:00:00')]),
-     V.DONE, V.PAID, False, 1000, PAN, False),
+        op('REFUND', 'EXECUTED', '2026-11-14T11:00:00')]),
+     V.CANCEL, V.REVERSED, False, 1000, None, False),
     ('voided_after_capture', answer(1000, [
         op('CAPTURE', 'EXECUTED', '2026-11-14T10:00:05'),
         op('VOID', 'VOIDED', '2026-11-14T11:00:00')]),
+     V.CANCEL, V.REVERSED, False, 1000, None, False),
+    ('partial_refund_after_capture', answer(1000, [
+        op('CAPTURE', 'EXECUTED', '2026-11-14T10:00:05'),
+        op('REFUND', 'EXECUTED', '2026-11-14T11:00:00', amount='300')]),
      V.DONE, V.PAID, False, 1000, PAN, False),
+    ('refund_without_amount', strip_reversal_amount(answer(1000, [
+        op('CAPTURE', 'EXECUTED', '2026-11-14T10:00:05'),
+        op('REFUND', 'EXECUTED', '2026-11-14T11:00:00')])),
+     V.CANCEL, V.REVERSED, False, 1000, None, False),
     ('capture_pending', answer(None, [
         op('CAPTURE', 'PENDING', '2026-11-14T10:00:05')]),
      V.PENDING, V.SCHEME_PENDING, False, 1000, None, True),
@@ -172,8 +189,9 @@ class VerdictCasesTest(unittest.TestCase):
     def test_every_reason_is_known(self):
         known = {
             V.PAID, V.ALREADY_CAPTURED, V.CAPTURE_WAIVED, V.AUTHORIZED,
-            V.UNDECIDED, V.SCHEME_PENDING, V.DECLINED, V.INVALID_ORDER,
-            V.INVALID_CURRENCY, V.CAPTURE_INCOMPLETE, V.AMOUNT_MISMATCH,
+            V.UNDECIDED, V.SCHEME_PENDING, V.DECLINED, V.REVERSED,
+            V.INVALID_ORDER, V.INVALID_CURRENCY, V.CAPTURE_INCOMPLETE,
+            V.AMOUNT_MISMATCH,
         }
         for (name, payload, *_rest) in CASES:
             with self.subTest(case=name):
@@ -291,15 +309,23 @@ class OperationChoiceTest(unittest.TestCase):
 
 
 class ReversalTest(unittest.TestCase):
-    """A capture already executed survives a later decline, not a refund."""
+    """A capture already executed survives a later decline, not a reversal."""
 
     def test_reversal_after_capture_counts(self):
         data = answer(1000, [
             op('CAPTURE', 'EXECUTED', '2026-11-14T10:00:05'),
-            op('REFUND', 'REFUNDED', '2026-11-14T11:00:00'),
+            op('REFUND', 'EXECUTED', '2026-11-14T11:00:00'),
         ])
         capture = V.latest_operation(data, V.CAPTURE_OPS)
-        self.assertTrue(V.reversal_after_capture(data, capture))
+        self.assertEqual(V.reversed_after_capture(data, capture, 'EUR'), 1000)
+
+    def test_partial_reversal_is_measured(self):
+        data = answer(1000, [
+            op('CAPTURE', 'EXECUTED', '2026-11-14T10:00:05'),
+            op('REFUND', 'EXECUTED', '2026-11-14T11:00:00', amount='300'),
+        ])
+        capture = V.latest_operation(data, V.CAPTURE_OPS)
+        self.assertEqual(V.reversed_after_capture(data, capture, 'EUR'), 300)
 
     def test_decline_after_capture_is_not_a_reversal(self):
         data = answer(1000, [
@@ -307,16 +333,32 @@ class ReversalTest(unittest.TestCase):
             op('AUTHORIZATION', 'DENIED_BY_RISK', '2026-11-14T10:01:00'),
         ])
         capture = V.latest_operation(data, V.CAPTURE_OPS)
-        self.assertFalse(V.reversal_after_capture(data, capture))
+        self.assertEqual(V.reversed_after_capture(data, capture, 'EUR'), 0)
 
     def test_reversal_without_dates_is_assumed(self):
-        """Without dates the reversal cannot be excluded: fail-closed."""
+        """Without dates the reversal cannot be excluded: it is counted."""
         data = strip_dates(answer(1000, [
             op('CAPTURE', 'EXECUTED', '2026-11-14T10:00:05'),
             op('VOID', 'VOIDED', '2026-11-14T11:00:00'),
         ]))
         capture = V.latest_operation(data, V.CAPTURE_OPS)
-        self.assertTrue(V.reversal_after_capture(data, capture))
+        self.assertEqual(V.reversed_after_capture(data, capture, 'EUR'), 1000)
+
+    def test_reversal_without_amount_is_unknown(self):
+        data = strip_reversal_amount(answer(1000, [
+            op('CAPTURE', 'EXECUTED', '2026-11-14T10:00:05'),
+            op('REFUND', 'EXECUTED', '2026-11-14T11:00:00'),
+        ]))
+        capture = V.latest_operation(data, V.CAPTURE_OPS)
+        self.assertIsNone(V.reversed_after_capture(data, capture, 'EUR'))
+
+    def test_reversal_in_another_currency_is_unknown(self):
+        data = answer(1000, [
+            op('CAPTURE', 'EXECUTED', '2026-11-14T10:00:05'),
+            op('REFUND', 'EXECUTED', '2026-11-14T11:00:00', currency='USD'),
+        ])
+        capture = V.latest_operation(data, V.CAPTURE_OPS)
+        self.assertIsNone(V.reversed_after_capture(data, capture, 'EUR'))
 
 
 if __name__ == '__main__':

@@ -541,6 +541,117 @@ class TestNexiReview(TransactionCase):
         tx.invalidate_recordset()
         self.assertEqual(tx.state, 'done')
 
+    def test_reconcile_surfaces_buttons_order_overpay(self):
+        """A buttons order paid twice must reach the manual check, not vanish."""
+        from datetime import timedelta
+        from odoo import fields as _fields
+        self.provider.nexi_mode = 'build'
+        tx = self._new_tx()
+        tx._set_pending(state_message='pending')
+        old = _fields.Datetime.now() - timedelta(minutes=30)
+        self.env.cr.execute(
+            'UPDATE payment_transaction SET create_date = %s WHERE id = %s',
+            (old, tx.id),
+        )
+        tx.invalidate_recordset()
+        empty = self._nexi_answer(tx.reference, 0)
+        excess = self._nexi_answer(
+            tx.reference + '-m', 2000,
+            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
+        )
+
+        def fake_request(method, url, payload=None, params=None):
+            if url.endswith('-m'):
+                return excess
+            return empty
+
+        Tx = self.env['payment.transaction']
+        with patch.object(type(self.provider), '_nexi_make_request', side_effect=fake_request):
+            with patch.object(type(Tx), '_post_process', return_value=True):
+                with self.assertLogs(
+                    'odoo.addons.payment_nexi.models.payment_transaction',
+                    level='ERROR',
+                ) as logs:
+                    Tx._nexi_reconcile_pending()
+        tx.invalidate_recordset()
+        self.assertEqual(tx.state, 'error', 'the surplus must not stay invisible')
+        self.assertFalse(tx.nexi_uncertain)
+        self.assertTrue(
+            any('captured 2000' in line and 'expected 1000' in line
+                for line in logs.output),
+            'the log must state captured vs expected for the manual refund',
+        )
+
+    def test_reconcile_buttons_order_reversal_cancels(self):
+        """A -m order paid and then given back is not a paid cart."""
+        from datetime import timedelta
+        from odoo import fields as _fields
+        self.provider.nexi_mode = 'build'
+        tx = self._new_tx()
+        tx._set_pending(state_message='pending')
+        old = _fields.Datetime.now() - timedelta(minutes=30)
+        self.env.cr.execute(
+            'UPDATE payment_transaction SET create_date = %s WHERE id = %s',
+            (old, tx.id),
+        )
+        tx.invalidate_recordset()
+        empty = self._nexi_answer(tx.reference, 0)
+        refunded = self._nexi_answer(
+            tx.reference + '-m', 1000,
+            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
+        )
+        refunded['operations'].append({
+            'operationType': 'REFUND',
+            'operationResult': 'EXECUTED',
+            'operationTime': '2026-10-30T11:00:00',
+            'operationAmount': '1000',
+            'operationCurrency': 'EUR',
+        })
+
+        def fake_request(method, url, payload=None, params=None):
+            if url.endswith('-m'):
+                return refunded
+            return empty
+
+        Tx = self.env['payment.transaction']
+        with patch.object(type(self.provider), '_nexi_make_request', side_effect=fake_request):
+            with patch.object(type(Tx), '_post_process', return_value=True):
+                Tx._nexi_reconcile_pending()
+        tx.invalidate_recordset()
+        self.assertEqual(tx.state, 'cancel')
+        self.assertFalse(tx.nexi_uncertain)
+
+    def test_reconcile_buttons_order_wrong_id_does_not_condemn(self):
+        """A -m answer about another order is not ours: the pending stays."""
+        from datetime import timedelta
+        from odoo import fields as _fields
+        self.provider.nexi_mode = 'build'
+        tx = self._new_tx()
+        tx._set_pending(state_message='pending')
+        old = _fields.Datetime.now() - timedelta(minutes=30)
+        self.env.cr.execute(
+            'UPDATE payment_transaction SET create_date = %s WHERE id = %s',
+            (old, tx.id),
+        )
+        tx.invalidate_recordset()
+        empty = self._nexi_answer(tx.reference, 0)
+        foreign = self._nexi_answer(
+            'SOMEONE-ELSE', 2000,
+            ('CAPTURE', 'EXECUTED', '2026-10-30T10:00:05'),
+        )
+
+        def fake_request(method, url, payload=None, params=None):
+            if url.endswith('-m'):
+                return foreign
+            return empty
+
+        Tx = self.env['payment.transaction']
+        with patch.object(type(self.provider), '_nexi_make_request', side_effect=fake_request):
+            Tx._nexi_reconcile_pending()
+        tx.invalidate_recordset()
+        self.assertEqual(tx.state, 'pending')
+        self.assertFalse(tx.nexi_uncertain)
+
     def test_reconcile_probe_never_condemns(self):
         """#9 H-A1: -m order missing -> the pending stays pending, never error."""
         from datetime import timedelta

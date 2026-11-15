@@ -4,9 +4,9 @@
 The gateway answers with an order and a list of operations. Deciding whether
 the money is in is not a matter of reading one field: the currency must match,
 the captured figure must cover the expected one, a capture already executed
-survives a later decline, an authorization without capture is not a closed
-payment, and an answer the gateway itself is unsure about must never close
-anything.
+survives a later decline but not a reversal that gives it back, an
+authorization without capture is not a closed payment, and an answer the
+gateway itself is unsure about must never close anything.
 
 This module owns that policy. Given the answer, the expected figure in cents
 and the currency, it returns a :class:`Verdict`: the outcome, why, whether the
@@ -50,6 +50,7 @@ AUTHORIZED = 'authorized'              # blocked only: no money taken
 UNDECIDED = 'undecided'                # auth and capture disagree, no dates
 SCHEME_PENDING = 'scheme_pending'      # the gateway has not decided yet
 DECLINED = 'declined'
+REVERSED = 'reversed'                  # the capture was given back: money is not in
 INVALID_ORDER = 'invalid_order'        # not the order we asked for
 INVALID_CURRENCY = 'invalid_currency'
 CAPTURE_INCOMPLETE = 'capture_incomplete'
@@ -263,16 +264,22 @@ def capture_total(data, op, currency=None):
     return total if found else None
 
 
-def reversal_after_capture(data, capture_op):
-    """True if a reversal/refund was executed after the capture.
+def reversed_after_capture(data, capture_op, currency=None):
+    """How much of the capture was given back after it, in cents.
 
-    An executed CAPTURE must not be undone by a later decline (e.g. a new
-    attempt of the same order), but a VOID/REFUND that arrived after the
-    capture must. Without dates the reversal cannot be excluded: fail-closed.
+    A VOID or a REFUND that arrived after the capture undoes it: one that
+    covers the whole capture means the money is not in, and one that cannot be
+    sized must be treated the same way (fail-closed). A partial refund leaves
+    the payment standing. Without dates the reversal cannot be excluded.
+
+    :return: 0 when there is no reversal; the summed cents of the reversals
+             after the capture; ``None`` when a reversal exists but its amount
+             or currency cannot be read.
     """
     data = data if isinstance(data, dict) else {}
     capture_ts = op_ts(capture_op) if capture_op else None
     operations = data.get('operations')
+    total = 0
     for item in (operations if isinstance(operations, list) else []):
         if not isinstance(item, dict):
             continue
@@ -285,9 +292,21 @@ def reversal_after_capture(data, capture_op):
         if kind in ('AUTHORIZATION', 'CAPTURE') and not reversal_result:
             continue
         ts = op_ts(item)
-        if capture_ts is None or ts is None or ts >= capture_ts:
-            return True
-    return False
+        if not (capture_ts is None or ts is None or ts >= capture_ts):
+            continue
+        got_cur = item.get('operationCurrency')
+        if currency and got_cur and got_cur != currency:
+            # Another currency: it cannot be netted against this capture.
+            return None
+        amount = parse_cents(item.get('operationAmount'))
+        if amount is None:
+            amount = parse_cents(item.get('capturedAmount'))
+        if amount is None:
+            # A reversal with no readable figure: the capture cannot be
+            # considered live.
+            return None
+        total += amount
+    return total
 
 
 def _masked_pan(op):
@@ -381,6 +400,14 @@ def _paid(data, op, decided_by, result, expected_cents, currency, captured):
         # back office. Asking again would not change the answer.
         return Verdict(ERROR, AMOUNT_MISMATCH, expected_cents, captured,
                        decided_by, result, None)
+    returned = reversed_after_capture(
+        data, latest_operation(data, CAPTURE_OPS), currency=currency)
+    if returned is None or returned >= total:
+        # The capture was given back, or the reversal cannot be sized: the
+        # money is not in. The verdict cannot depend on whether a later
+        # attempt happened to be declined, so this is decided here too.
+        return Verdict(CANCEL, REVERSED, expected_cents, captured,
+                       decided_by, result, None)
     return Verdict(DONE, PAID, expected_cents, captured, decided_by, result,
                    masked)
 
@@ -391,13 +418,16 @@ def _declined(data, result, expected_cents, currency, captured):
     # an amount that was never taken.
     taken = capture_total(data, None, currency=currency)
     capture_op = latest_operation(data, CAPTURE_OPS)
+    # Only a capture nothing gave back is still standing: a partial refund
+    # leaves it, a full (or unsizable) one does not.
+    live_capture = reversed_after_capture(data, capture_op, currency=currency) == 0
     if result not in ('REFUNDED', 'VOIDED') and taken is not None:
-        if taken == expected_cents and not reversal_after_capture(data, capture_op):
+        if live_capture and taken == expected_cents:
             # Capture already executed: a later decline (a new attempt of the
             # same order) does not undo the money taken.
             return Verdict(DONE, ALREADY_CAPTURED, expected_cents, captured,
                            'capture', result, None)
-        if taken > expected_cents and not reversal_after_capture(data, capture_op):
+        if live_capture and taken > expected_cents:
             return Verdict(ERROR, AMOUNT_MISMATCH, expected_cents, captured,
                            'capture', result, None)
     return Verdict(CANCEL, DECLINED, expected_cents, captured, 'capture',

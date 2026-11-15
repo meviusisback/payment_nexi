@@ -198,12 +198,12 @@ ODOO_HTTP, CONTROLLER, PROVIDER, TRANSACTION = _install_addon()
 
 
 def _load_verdict():
-    """Il modulo puro, senza passare dal pacchetto (che importa Odoo)."""
+    """The pure module, without going through the package (which imports Odoo)."""
     import importlib.util
 
     path = ADDON_ROOT / 'models' / 'nexi_verdict.py'
     spec = importlib.util.spec_from_file_location('nexi_verdict', str(path))
-    assert spec and spec.loader, 'models/nexi_verdict.py non trovato'
+    assert spec and spec.loader, 'models/nexi_verdict.py not found'
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -1095,8 +1095,8 @@ class CaptureEvidenceTest(unittest.TestCase):
             'operationTime': '2026-10-30T10:00:06',
         }
         data = {'operations': [self.CAPTURE, refund]}
-        self.assertTrue(
-            VERDICT.reversal_after_capture(data, self.CAPTURE))
+        self.assertEqual(
+            VERDICT.reversed_after_capture(data, self.CAPTURE, 'EUR'), 1000)
 
     def test_reversal_before_capture_does_not_count(self):
         refund = {
@@ -1106,14 +1106,14 @@ class CaptureEvidenceTest(unittest.TestCase):
             'operationTime': '2026-10-30T10:00:00',
         }
         data = {'operations': [refund, self.CAPTURE]}
-        self.assertFalse(
-            VERDICT.reversal_after_capture(data, self.CAPTURE))
+        self.assertEqual(
+            VERDICT.reversed_after_capture(data, self.CAPTURE, 'EUR'), 0)
 
-    def test_reversal_without_dates_is_fail_closed(self):
+    def test_reversal_without_amount_is_unknown(self):
         refund = {'operationType': 'REFUND', 'operationResult': 'EXECUTED'}
         data = {'operations': [self.CAPTURE, refund]}
-        self.assertTrue(
-            VERDICT.reversal_after_capture(data, self.CAPTURE))
+        self.assertIsNone(
+            VERDICT.reversed_after_capture(data, self.CAPTURE, 'EUR'))
 
 
 class UiStringsTest(unittest.TestCase):

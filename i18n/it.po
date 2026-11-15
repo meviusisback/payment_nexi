@@ -3,7 +3,7 @@
 # Italian text back for Italian shops. Other languages fall back to English.
 msgid ""
 msgstr ""
-"Project-Id-Version: payment_nexi 1.4.10\n"
+"Project-Id-Version: payment_nexi 1.4.12\n"
 "Report-Msgid-Bugs-To: \n"
 "POT-Creation-Date: 2026-11-14 00:00+0000\n"
 "PO-Revision-Date: 2026-11-14 00:00+0000\n"
@@ -508,6 +508,12 @@ msgstr "Nexi: %s"
 #: model:ir.actions.server,name:payment_nexi.ir_cron_nexi_reconcile_ir_actions_server
 msgid "Nexi: recheck payments left pending"
 msgstr "Nexi: riverifica i pagamenti rimasti in attesa"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Nexi: the payment was reversed."
+msgstr "Nexi: il pagamento è stato stornato."
 
 #. module: payment_nexi
 #. odoo-python

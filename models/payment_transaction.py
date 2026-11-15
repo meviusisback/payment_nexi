@@ -26,8 +26,8 @@ _logger = logging.getLogger(__name__)
 # means is decided there, applied here. See GLOSSARY.md ("Verdict").
 from .nexi_verdict import (
     ALREADY_CAPTURED, AMOUNT_MISMATCH, AUTHORIZED, CANCEL, CAPTURE_INCOMPLETE,
-    CAPTURE_WAIVED, DONE, INVALID_CURRENCY, INVALID_ORDER, PENDING,
-    capture_total, to_cents, verdict,
+    CAPTURE_WAIVED, DONE, ERROR, INVALID_CURRENCY, INVALID_ORDER, PENDING,
+    REVERSED, to_cents, verdict,
 )
 
 # Odoo method -> Nexi paymentService. Empty = all. Values from the Nexi table.
@@ -722,25 +722,24 @@ class PaymentTransactionNexi(models.Model):
             raise ValidationError(_('Invalid Nexi return.'))
         return tx
 
-    def _nexi_probe_paid(self, order_ref):
-        """True if the Nexi order is paid, without touching the state.
+    def _nexi_probe_outcome(self, order_ref):
+        """The policy verdict on a Nexi order, without touching the state.
 
-        Read-only probe for the reconciliation of the buttons order: an order
-        that does not exist, talks about another order, or is not fully
-        captured counts as False, never as an error. It answers through the
-        same policy the confirmation uses, so "paid" cannot mean two things:
-        an authorization without capture (no money moved) and a capture that
-        does not cover the expected figure are not paid.
+        Read-only probe for the reconciliation of the buttons order. It
+        answers through the same policy the confirmation uses, so "paid"
+        cannot mean two things: an authorization without capture (no money
+        moved) and a capture that does not cover the expected figure are not
+        paid. ``None`` when the order cannot be read at all (missing,
+        unreachable): a probe never condemns.
         """
         self.ensure_one()
         try:
             data = self.provider_id._nexi_make_request(
                 'GET', _nexi_verify_url(self.provider_id, order_ref))
         except Exception:
-            return False
-        outcome = verdict(
+            return None
+        return verdict(
             order_ref, data, to_cents(self.amount), self.currency_id.name)
-        return outcome.kind == DONE
 
     @api.model
     def _nexi_reconcile_pending(self, limit=20):
@@ -784,10 +783,25 @@ class PaymentTransactionNexi(models.Model):
                     tx.invalidate_recordset()
                     if tx.state == 'pending' and tx.provider_id.nexi_mode == 'build':
                         # The Build prepare also creates the APM buttons order
-                        # (reference-m): if that one is the paid one, it closes
-                        # it. The probe never touches the state: if the buttons
-                        # order is not paid (or does not exist) nothing happens.
-                        if tx._nexi_probe_paid(tx.reference + '-m'):
+                        # (reference-m). The probe never touches the state: only
+                        # the notification path decides, so "paid" cannot mean
+                        # two things for the two orders of one payment.
+                        probe = tx._nexi_probe_outcome(tx.reference + '-m')
+                        # Paid, or with money that came back: the buttons order
+                        # decides the transaction. Taken-but-inconsistent
+                        # figures must reach the manual check instead of
+                        # vanishing; an answer about another order is never
+                        # charged to this transaction.
+                        chargeable = bool(probe) and (
+                            probe.kind == DONE
+                            or (probe.kind == CANCEL and probe.reason == REVERSED)
+                            or (
+                                probe.kind == ERROR
+                                and probe.reason != INVALID_ORDER
+                                and (probe.captured_cents or 0) > 0
+                            )
+                        )
+                        if chargeable:
                             tx._process_notification_data({
                                 'nexi_retry': True,
                                 'nexi_order_ref': tx.reference + '-m',
@@ -958,7 +972,11 @@ class PaymentTransactionNexi(models.Model):
             return
         if outcome.kind == CANCEL:
             self.sudo().write({'nexi_uncertain': False})
-            self._set_canceled(state_message=f'Nexi KO: {outcome.operation_result}')
+            if outcome.reason == REVERSED:
+                message = _('Nexi: the payment was reversed.')
+            else:
+                message = f'Nexi KO: {outcome.operation_result}'
+            self._set_canceled(state_message=message)
             return
         message = {
             INVALID_CURRENCY: _('Invalid Nexi amount.'),
