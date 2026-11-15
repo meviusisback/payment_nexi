@@ -5,7 +5,7 @@
 **Odoo 18 payment provider for Nexi XPay Web (REST API with `X-Api-Key`): Hosted Page redirect or embedded card fields at checkout. Odoo never sees the card number.**
 
 [![License: LGPL-3](https://img.shields.io/github/license/meviusisback/payment_nexi)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.4.10-blue)
+![Version](https://img.shields.io/badge/version-1.4.12-blue)
 ![Linux](https://img.shields.io/badge/linux-supported-1793d1)
 
 ![Nexi XPay Web checkout: payment methods with brand logos](static/description/checkout.png)
@@ -39,7 +39,7 @@ Selling online with Odoo on an Italian Nexi terminal means choosing between send
 - **OneClick saved cards** (Hosted Page): creates and reuses a Nexi contract per terminal. At checkout the saved cards are listed, the card the customer picks wins over automatic reuse, and *Use a new card* really starts a new card without sending a stored contract.
 - **No card data in Odoo**: only the masked PAN (`**** 1234`) is stored, never the full number or the CVV.
 - **Shopper texts follow the shop language**: the code carries English msgids and `i18n/it.po` ships the Italian text, so an Italian shop shows Italian and an English shop shows English. Other languages fall back to English.
-- **No refunds, no manual capture**: the module only reads `AUTHORIZATION` and `CAPTURE`, so a refund done from the Nexi back office leaves the transaction `done` — record it by hand in Odoo.
+- **No refunds, no manual capture**: the module never asks Nexi for a refund or a manual capture, but it does read the reversals Nexi reports: a `VOID`/`REFUND` that covers the whole capture — or whose amount cannot be read — is never closed as paid (`cancel`, "payment was reversed"), while a partial refund leaves the transaction `done`. A reversal is read when the order is re-checked (confirmation, reconciliation); a refund issued after the transaction is closed must be recorded by hand in Odoo.
 
 ## Install
 
@@ -102,6 +102,8 @@ There is no automatic conversion: a USD order is not converted to EUR at payment
 
 Behind a reverse proxy or load balancer, Odoo must see the real client address: set `proxy_mode = True` in `odoo.conf` and let the proxy sanitize `X-Forwarded-For` (Odoo 18 trusts the first entry with no allowlist). Otherwise all Nexi notifications share one rate-limit bucket per worker and a busy shop can starve the others with legitimate `429`s.
 
+The public base used for the return URLs must be **https** (the *Shop public base* field, or `web.base.url`): with an `http` or localhost base the payment stops with a clear error instead of sending the per-transaction return token over a plaintext link.
+
 ## How it works
 
 Every transaction carries a random code (`tok`): without the right code the public routes answer "not found" without touching Nexi or the payment. On JSON routes the code travels in the `X-Nexi-Token` header (the query string remains for Nexi return URLs and old links), and the Build page sends `Referrer-Policy: no-referrer`; strip `tok` from reverse-proxy access logs. The JSON write routes validate the session CSRF token explicitly, because Odoo 18 does not enforce `csrf=True` on the JSON dispatcher. The order to verify is decided by the transaction, never by the caller; the Nexi response must refer to the same order, and the amount is compared in cents. Nexi data (`contractId`, sessions, masked PAN) is written by the system only — external writes via RPC are rejected. Saved cards are visible to the owner **and to the other contacts of the same company** (the contract belongs to the commercial partner). Nexi notifications are counted per transaction, browser returns per IP; only generic messages reach the browser, details stay in the server logs.
@@ -109,7 +111,7 @@ Every transaction carries a random code (`tok`): without the right code the publ
 ```
 payment_nexi/
 ├── __init__.py                     # installation hook
-├── __manifest__.py                 # version 1.4.10, depends, data files
+├── __manifest__.py                 # version 1.4.12, depends, data files
 ├── controllers/main.py             # Nexi return + Build routes
 ├── data/payment_method_data.xml    # payment methods (Nexi-only codes; shared ones come from the core)
 ├── i18n/it.po                      # Italian translation (English msgids in the code)
@@ -117,6 +119,7 @@ payment_nexi/
 │   ├── payment_provider.py         # fields, API calls, URLs
 │   ├── payment_method_nexi.py      # methods visible at checkout
 │   ├── payment_nexi_method_availability.py  # methods per terminal
+│   ├── nexi_verdict.py             # outcome policy, no Odoo imports
 │   └── payment_transaction.py      # order creation, outcome, OneClick
 ├── security/ir.model.access.csv
 ├── static/description/             # marketplace card, icon and checkout.png
@@ -127,9 +130,11 @@ payment_nexi/
 ## Docs
 
 - [LICENSE](LICENSE)
+- [GLOSSARY.md](GLOSSARY.md) — the words the module uses for its domain
 - [__manifest__.py](__manifest__.py) — version, `depends`, data files
 - [controllers/main.py](controllers/main.py) — Nexi return and Build routes
 - [models/payment_provider.py](models/payment_provider.py) — provider fields and API calls
+- [models/nexi_verdict.py](models/nexi_verdict.py) — outcome policy (no Odoo imports)
 - [models/payment_transaction.py](models/payment_transaction.py) — order creation, outcome check, OneClick
 - [views/payment_nexi_templates.xml](views/payment_nexi_templates.xml) — checkout templates
 - [security/ir.model.access.csv](security/ir.model.access.csv) — access rights

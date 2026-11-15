@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 import requests
 
 from odoo import _, fields, models
-from odoo.exceptions import ValidationError
+from odoo.exceptions import AccessError, ValidationError
 
 _logger = logging.getLogger(__name__)
 
@@ -145,11 +145,13 @@ CHECK_AMOUNT_DEFAULT = '100'
 
 # Texts with which Nexi says "this service is not enabled on this terminal".
 # Only these disable a method: a timeout or a wrong key does not.
+# The amount codes are NOT here: PS0064/GW0043 mean 'figure below the
+# minimum of this service' (see the PayPal Pay in 3 handling), so treating them
+# as a refusal would hide a working method.
 REJECTION_MARKERS = (
     'not enabled', 'not_enabled', 'not allowed', 'not_allowed',
     'not configured', 'not_configured', 'not available', 'not_available',
     'service not', 'payment service not',
-    'ps0064', 'gw0043',
 )
 
 
@@ -330,6 +332,12 @@ class PaymentProviderNexi(models.Model):
     def button_nexi_check_methods(self):
         """Test every method on Nexi and store the outcome for THIS terminal."""
         self.ensure_one()
+        # The button lives on a group_system-only form, but a method called via
+        # /web/dataset/call_kw is not ACL-checked by Odoo: without this guard
+        # any logged-in customer could spend the terminal key and create orders
+        # on Nexi.
+        if not self.env.user.has_group('base.group_system'):
+            raise AccessError(_('Only the system can check the Nexi methods.'))
         from .payment_transaction import METHOD_SERVICE
         if not self.nexi_api_key:
             raise ValidationError(_(

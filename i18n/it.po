@@ -3,7 +3,7 @@
 # Italian text back for Italian shops. Other languages fall back to English.
 msgid ""
 msgstr ""
-"Project-Id-Version: payment_nexi 1.4.10\n"
+"Project-Id-Version: payment_nexi 1.4.12\n"
 "Report-Msgid-Bugs-To: \n"
 "POT-Creation-Date: 2026-11-14 00:00+0000\n"
 "PO-Revision-Date: 2026-11-14 00:00+0000\n"
@@ -453,6 +453,12 @@ msgid "Nexi is unreachable. Try again."
 msgstr "Nexi non raggiungibile. Riprova."
 
 #. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Nexi needs a public HTTPS URL: set the Shop public base (or web.base.url) to the shop https address."
+msgstr "Nexi richiede un indirizzo pubblico HTTPS: imposta la Base pubblica del negozio (o web.base.url) sull'indirizzo https del negozio."
+
+#. module: payment_nexi
 #: model:ir.model,name:payment_nexi.model_payment_nexi_method_availability
 msgid "Nexi methods per terminal"
 msgstr "Metodi Nexi per terminale"
@@ -511,6 +517,12 @@ msgstr "Nexi: riverifica i pagamenti rimasti in attesa"
 
 #. module: payment_nexi
 #. odoo-python
+#: code:addons/payment_nexi/models/payment_transaction.py:0
+msgid "Nexi: the payment was reversed."
+msgstr "Nexi: il pagamento è stato stornato."
+
+#. module: payment_nexi
+#. odoo-python
 #: code:addons/payment_nexi/models/payment_provider.py:0
 msgid "No Nexi method to check."
 msgstr "Nessun metodo Nexi da verificare."
@@ -536,6 +548,12 @@ msgstr "OneClick CIT"
 #: model:ir.model.fields,field_description:payment_nexi.field_payment_transaction__nexi_contract_id
 msgid "OneClick contract"
 msgstr "Contratto OneClick"
+
+#. module: payment_nexi
+#. odoo-python
+#: code:addons/payment_nexi/models/payment_provider.py:0
+msgid "Only the system can check the Nexi methods."
+msgstr "Solo il sistema può verificare i metodi Nexi."
 
 #. module: payment_nexi
 #. odoo-python
