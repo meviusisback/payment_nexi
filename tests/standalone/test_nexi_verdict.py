@@ -380,5 +380,89 @@ class ReversalTest(unittest.TestCase):
         self.assertIsNone(V.reversed_after_capture(data, capture, 'EUR'))
 
 
+class RefundableOperationTest(unittest.TestCase):
+    """Which operation a refund must address, and how much is left to give back.
+
+    The figures here are the ones that decide whether money can leave twice:
+    what was captured minus what was already given back.
+    """
+
+    def test_capture_is_the_operation_to_refund(self):
+        """A refund is addressed to the CAPTURE, not to the order."""
+        data = answer(1000, [
+            op('AUTHORIZATION', 'EXECUTED', '2026-11-14T10:00:00'),
+            op('CAPTURE', 'EXECUTED', '2026-11-14T10:00:05'),
+        ])
+        operation, available = V.refundable_operation(data, ORDER, 'EUR')
+        self.assertEqual(operation.get('operationType'), 'CAPTURE')
+        self.assertEqual(available, 1000)
+
+    def test_authorization_only_is_not_refundable(self):
+        """An authorization is not money taken: giving it back is a void."""
+        data = answer(None, [
+            op('AUTHORIZATION', 'EXECUTED', '2026-11-14T10:00:00'),
+        ])
+        operation, available = V.refundable_operation(data, ORDER, 'EUR')
+        self.assertEqual(operation, {})
+        self.assertEqual(available, 0)
+
+    def test_partial_refund_leaves_the_rest(self):
+        data = answer(1000, [
+            op('CAPTURE', 'EXECUTED', '2026-11-14T10:00:05'),
+            op('REFUND', 'EXECUTED', '2026-11-14T11:00:00', amount='300'),
+        ])
+        _operation, available = V.refundable_operation(data, ORDER, 'EUR')
+        self.assertEqual(available, 700)
+
+    def test_full_refund_leaves_nothing(self):
+        """Nothing left: the caller must refuse instead of refunding again."""
+        data = answer(1000, [
+            op('CAPTURE', 'EXECUTED', '2026-11-14T10:00:05'),
+            op('REFUND', 'VOIDED', '2026-11-14T11:00:00'),
+        ])
+        _operation, available = V.refundable_operation(data, ORDER, 'EUR')
+        self.assertEqual(available, 0)
+
+    def test_unsizable_reversal_is_none_not_zero(self):
+        """A reversal whose amount cannot be read is unknown, never 'all free'."""
+        data = strip_reversal_amount(answer(1000, [
+            op('CAPTURE', 'EXECUTED', '2026-11-14T10:00:05'),
+            op('REFUND', 'EXECUTED', '2026-11-14T11:00:00'),
+        ]))
+        _operation, available = V.refundable_operation(data, ORDER, 'EUR')
+        self.assertIsNone(available)
+
+    def test_another_order_is_refused(self):
+        data = answer(1000, [
+            op('CAPTURE', 'EXECUTED', '2026-11-14T10:00:05'),
+        ], order_ref='SOMEONE-ELSE')
+        operation, available = V.refundable_operation(data, ORDER, 'EUR')
+        self.assertEqual(operation, {})
+        self.assertEqual(available, 0)
+
+    def test_no_order_id_is_refused(self):
+        data = strip_order_id(answer(1000, [
+            op('CAPTURE', 'EXECUTED', '2026-11-14T10:00:05'),
+        ]))
+        operation, available = V.refundable_operation(data, ORDER, 'EUR')
+        self.assertEqual(operation, {})
+        self.assertEqual(available, 0)
+
+    def test_declined_capture_is_not_refundable(self):
+        """A capture that never executed took no money: nothing to give back."""
+        data = answer(None, [
+            op('CAPTURE', 'CANCELED', '2026-11-14T10:00:05'),
+        ])
+        operation, available = V.refundable_operation(data, ORDER, 'EUR')
+        self.assertEqual(operation, {})
+        self.assertEqual(available, 0)
+
+    def test_hostile_shapes_do_not_raise(self):
+        for data in ({}, [], 'x', 42, None, {'operations': 'nope'}):
+            operation, available = V.refundable_operation(data, ORDER, 'EUR')
+            self.assertEqual(operation, {})
+            self.assertEqual(available, 0)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -27,7 +27,7 @@ _logger = logging.getLogger(__name__)
 from .nexi_verdict import (
     ALREADY_CAPTURED, AMOUNT_MISMATCH, AUTHORIZED, CANCEL, CAPTURE_INCOMPLETE,
     CAPTURE_WAIVED, DONE, ERROR, INVALID_CURRENCY, INVALID_ORDER, PENDING,
-    REVERSED, to_cents, verdict,
+    REVERSED, refundable_operation, to_cents, verdict,
 )
 
 # Odoo method -> Nexi paymentService. Empty = all. Values from the Nexi table.
@@ -1139,13 +1139,80 @@ class PaymentTransactionNexi(models.Model):
             # order settling later must not go unnoticed.
             self.sudo().write({'nexi_settled_order': order_ref})
 
-    def _send_refund_request(self, amount_to_refund=None, create_refund_transaction=True):
+    def _send_refund_request(self, amount_to_refund=None):
+        """Refund a Nexi payment: ``POST /operations/{operationId}/refunds``.
+
+        Nexi addresses a refund to the operation that took the money, not to the
+        order, so the order is read first: what was captured, minus what was
+        already given back, is the ceiling of this request. Reading it from the
+        gateway and not from our own records is what makes a refund made from
+        the Nexi back office count too, so it cannot be given back twice.
+
+        Note: self.ensure_one()
+
+        :param float amount_to_refund: the amount to give back, or None for all.
+        :return: the refund transaction created for the request.
+        :rtype: recordset of `payment.transaction`
+        """
         self.ensure_one()
         if self.provider_code != 'nexi':
             return super()._send_refund_request(
                 amount_to_refund=amount_to_refund,
-                create_refund_transaction=create_refund_transaction,
             )
-        raise ValidationError(_(
-            'Nexi refund is not enabled: the back-office URL from developer.nexi.it is missing.'
-        ))
+
+        provider = self.provider_id
+        order_ref = self.nexi_settled_order or self.nexi_order_id or self.reference
+        currency = self.currency_id.name
+        wanted = to_cents(amount_to_refund or self.amount)
+        if wanted <= 0:
+            raise ValidationError(_('Nexi: the amount to refund must be positive.'))
+
+        try:
+            data = provider._nexi_make_request(
+                'GET', _nexi_verify_url(provider, order_ref))
+        except ValidationError as error:
+            # Nothing is sent when the order cannot be read: without the
+            # captured figure there is no ceiling, and a refund without a
+            # ceiling is how money goes out twice.
+            _logger.warning(
+                'Nexi refund %s: order %s not readable: %s',
+                self.reference, order_ref, _nexi_sanitize_text(error, 200))
+            raise
+        operation, available = refundable_operation(
+            data, order_ref, currency=currency)
+        if available is None:
+            raise ValidationError(_(
+                'Nexi: what is left to refund on %s cannot be read, '
+                'so no refund was sent.'
+            ) % order_ref)
+        if not operation or available <= 0:
+            raise ValidationError(_(
+                'Nexi: nothing left to refund on %s: the captured amount '
+                'was already given back.'
+            ) % order_ref)
+        if wanted > available:
+            raise ValidationError(_(
+                'Nexi: %(wanted)s cents exceeds the %(available)s cents still '
+                'refundable on %(order)s.'
+            ) % {'wanted': wanted, 'available': available, 'order': order_ref})
+
+        refund_tx = super()._send_refund_request(
+            amount_to_refund=amount_to_refund,
+        )
+        url = provider._nexi_refund_url(operation.get('operationId'))
+        try:
+            provider._nexi_make_request('POST', url, payload={
+                'amount': str(wanted),
+                'currency': currency,
+                'description': _nexi_sanitize_text(self.reference, 255),
+            })
+        except ValidationError:
+            _logger.warning(
+                'Nexi refund %s refused by the gateway (operation %s)',
+                self.reference, operation.get('operationId'))
+            raise
+        _logger.info(
+            'Nexi refund %s: %s cents on operation %s',
+            self.reference, wanted, operation.get('operationId'))
+        refund_tx._set_done(state_message=_('Nexi: refunded %s cents.') % wanted)
+        return refund_tx

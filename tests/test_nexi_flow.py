@@ -153,6 +153,135 @@ class TestNexiReview(TransactionCase):
             tx._process_notification_data({})
         self.assertEqual(tx.state, 'cancel')
 
+    # --- Nexi refunds -------------------------------------------------------
+    #
+    # A refund is addressed to the operation that took the money, and the
+    # ceiling is what was captured minus what was already given back, read from
+    # the gateway: these tests pin both, because either one missing is how money
+    # leaves twice.
+
+    @staticmethod
+    def _refund_answer(order_ref, captured='120', extra_operations=None):
+        operations = [{
+            'operationType': 'CAPTURE',
+            'operationResult': 'EXECUTED',
+            'operationAmount': captured,
+            'operationCurrency': 'EUR',
+            'operationTime': '2026-11-18T10:00:05',
+            'operationId': 'CAP-1',
+        }]
+        return {
+            'orderId': order_ref,
+            'orderStatus': {
+                'order': {'orderId': order_ref},
+                'capturedAmount': captured,
+            },
+            'operations': operations + list(extra_operations or []),
+        }
+
+    def _refund_with(self, extra_operations=None, captured='120'):
+        """Run action_refund against a stubbed gateway, collecting the calls."""
+        tx = self._new_tx(amount=1.2)
+        tx._set_done()
+        calls = []
+
+        def fake(method, url, payload=None, params=None):
+            calls.append((method, url, payload))
+            if method == 'GET':
+                # The answer must be about this transaction's own order: an
+                # answer about another one is refused, on purpose.
+                return self._refund_answer(tx.reference, captured, extra_operations)
+            return {
+                'operationId': 'REF-1',
+                'operationTime': '2026-11-18T11:00:00',
+            }
+
+        with patch.object(type(self.provider), '_nexi_make_request', side_effect=fake):
+            tx.action_refund()
+        return tx, calls
+
+    def test_refund_is_addressed_to_the_capture_operation(self):
+        """The POST goes to the CAPTURE's operation id, not to the order."""
+        tx, calls = self._refund_with()
+        posts = [c for c in calls if c[0] == 'POST']
+        self.assertEqual(len(posts), 1, calls)
+        _method, url, payload = posts[0]
+        self.assertIn('/operations/CAP-1/refunds', url)
+        self.assertNotIn('/orders/', url)
+        self.assertEqual(payload['amount'], '120')
+        self.assertEqual(payload['currency'], 'EUR')
+
+    def test_refund_closes_a_refund_transaction(self):
+        """The child refund transaction is confirmed and carries the amount."""
+        tx, _calls = self._refund_with()
+        refund = self.env['payment.transaction'].search([
+            ('source_transaction_id', '=', tx.id),
+            ('operation', '=', 'refund'),
+        ])
+        self.assertEqual(len(refund), 1)
+        self.assertEqual(refund.state, 'done')
+        self.assertAlmostEqual(abs(refund.amount), 1.2, places=2)
+
+    def test_refund_above_the_captured_amount_is_refused(self):
+        """Never more than what was captured, whatever the caller asks."""
+        tx = self._new_tx(amount=10.0)
+        tx._set_done()
+        calls = []
+
+        def fake(method, url, payload=None, params=None):
+            calls.append((method, url, payload))
+            # Captured 120 cents, the transaction asks 1000.
+            return self._refund_answer(tx.reference, '120')
+
+        with patch.object(type(self.provider), '_nexi_make_request', side_effect=fake):
+            with self.assertRaises(ValidationError):
+                tx.action_refund()
+        self.assertEqual([c for c in calls if c[0] == 'POST'], [])
+
+    def test_refund_with_nothing_left_is_refused(self):
+        """Already given back: no second refund is sent."""
+        refunded = [{
+            'operationType': 'REFUND',
+            'operationResult': 'EXECUTED',
+            'operationAmount': '120',
+            'operationCurrency': 'EUR',
+            'operationTime': '2026-11-18T10:30:00',
+            'operationId': 'REF-0',
+        }]
+        tx = self._new_tx(amount=1.2)
+        tx._set_done()
+        calls = []
+
+        def fake(method, url, payload=None, params=None):
+            calls.append((method, url, payload))
+            return self._refund_answer(tx.reference, '120', refunded)
+
+        with patch.object(type(self.provider), '_nexi_make_request', side_effect=fake):
+            with self.assertRaises(ValidationError):
+                tx.action_refund()
+        self.assertEqual([c for c in calls if c[0] == 'POST'], [])
+
+    def test_refund_is_refused_when_the_order_cannot_be_read(self):
+        """No ceiling, no refund: an unreadable order must not send money out."""
+        tx = self._new_tx(amount=1.2)
+        tx._set_done()
+        calls = []
+
+        def fake(method, url, payload=None, params=None):
+            calls.append((method, url, payload))
+            raise ValidationError('Nexi: unreachable')
+
+        with patch.object(type(self.provider), '_nexi_make_request', side_effect=fake):
+            with self.assertRaises(ValidationError):
+                tx.action_refund()
+        self.assertEqual([c for c in calls if c[0] == 'POST'], [])
+
+    def test_refund_only_on_a_confirmed_payment(self):
+        """A payment that is not done is not refundable."""
+        tx = self._new_tx(amount=1.2)
+        with self.assertRaises(ValidationError):
+            tx.action_refund()
+
     def test_method_hidden_only_on_the_terminal_that_refuses_it(self):
         other = self.provider.copy({'name': 'Nexi second terminal'})
         self.env['payment.nexi.method.availability'].create({

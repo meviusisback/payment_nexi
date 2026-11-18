@@ -328,6 +328,45 @@ def reversed_after_capture(data, capture_op, currency=None):
     return total
 
 
+def refundable_operation(data, order_ref, currency=None):
+    """The operation a refund must reference, and how much can still go back.
+
+    Nexi refunds are addressed to the operation that took the money
+    (``POST /operations/{operationId}/refunds``), not to the order: the order is
+    only read here to work out what is left. That operation is the CAPTURE; an
+    AUTHORIZATION is not money taken, so it is not refundable and giving it back
+    is a void, a different call the caller decides about.
+
+    :param data: the gateway answer about ``order_ref``.
+    :param order_ref: the order this must be about: an answer about another
+                      order (or with no id) is not trusted.
+    :param currency: the transaction currency, so a refund in another currency
+                     cannot be netted against this capture.
+    :return: ``(operation, available_cents)``. ``({}, 0)`` when nothing was
+             taken or everything was already given back, so the caller refuses
+             instead of sending a refund that cannot be honoured.
+             ``(operation, None)`` when a reversal exists but cannot be sized:
+             fail-closed, the caller must not refund on a guess.
+    """
+    data = data if isinstance(data, dict) else {}
+    if not got_order_id(data) or got_order_id(data) != order_ref:
+        return {}, 0
+    operation = latest_operation(data, CAPTURE_OPS, OK_RESULTS)
+    operation = operation if isinstance(operation, dict) else {}
+    if not operation:
+        return {}, 0
+    taken = capture_total(data, operation, currency=currency)
+    if not taken or taken <= 0:
+        return {}, 0
+    given_back = reversed_after_capture(data, operation, currency=currency)
+    if given_back is None:
+        # A reversal is already there and its amount cannot be read: what is
+        # left to give back is unknown, and guessing would refund twice.
+        return operation, None
+    available = taken - given_back
+    return operation, (available if available > 0 else 0)
+
+
 def _masked_pan(op):
     op = op if isinstance(op, dict) else {}
     return (op.get('paymentInstrumentInfo')

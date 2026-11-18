@@ -5,7 +5,7 @@ import re
 import threading
 import time
 import uuid
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import requests
 
@@ -432,6 +432,21 @@ class PaymentProviderNexi(models.Model):
             raise ValidationError(_('Invalid Nexi URL: HTTPS on a Nexi domain is required.'))
         return url
 
+    def _nexi_refund_url(self, operation_id):
+        """Refund URL of one operation: ``.../operations/{operationId}/refunds``.
+
+        Built from the configured base with the ``/orders/hpp`` tail removed, so
+        test and production follow the same setting the orders already use and
+        the key is only ever sent to that host.
+        """
+        base = self._nexi_base_url()
+        if base.endswith('/orders/hpp'):
+            base = base[: -len('/orders/hpp')]
+        operation = quote(str(operation_id or ''), safe='')
+        if not operation:
+            raise ValidationError(_('Nexi: the refund has no operation to address.'))
+        return f'{base}/operations/{operation}/refunds'
+
     def _nexi_build_url(self):
         """Build v3 orders URL: same host as HPP, path /orders/build."""
         base = self._nexi_base_url()
@@ -506,10 +521,13 @@ class PaymentProviderNexi(models.Model):
 
     def _compute_feature_support_fields(self):
         super()._compute_feature_support_fields()
-        # Simple v1: no refund, no manual capture.
+        # No manual capture: Nexi captures on its own for this flow.
+        # Refunds are partial: Nexi addresses them to the operation that took
+        # the money (see _send_refund_request) and lets a payment be given back
+        # in more than one step.
         # Token only with OneClick on: it shows "save card" at checkout.
         for p in self.filtered(lambda r: r.code == 'nexi'):
-            p.support_refund = 'none'
+            p.support_refund = 'partial'
             p.support_tokenization = bool(p.nexi_oneclick)
             p.support_manual_capture = False
 
