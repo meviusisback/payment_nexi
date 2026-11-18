@@ -185,8 +185,8 @@ class TestNexiReview(TransactionCase):
         tx._set_done()
         calls = []
 
-        def fake(method, url, payload=None, params=None):
-            calls.append((method, url, payload))
+        def fake(method, url, payload=None, params=None, extra_headers=None):
+            calls.append((method, url, payload, extra_headers))
             if method == 'GET':
                 # The answer must be about this transaction's own order: an
                 # answer about another one is refused, on purpose.
@@ -205,11 +205,15 @@ class TestNexiReview(TransactionCase):
         tx, calls = self._refund_with()
         posts = [c for c in calls if c[0] == 'POST']
         self.assertEqual(len(posts), 1, calls)
-        _method, url, payload = posts[0]
+        _method, url, payload, _headers = posts[0]
         self.assertIn('/operations/CAP-1/refunds', url)
         self.assertNotIn('/orders/', url)
         self.assertEqual(payload['amount'], '120')
         self.assertEqual(payload['currency'], 'EUR')
+        # Nexi refuses a refund without it (PS0074): the header must travel.
+        self.assertTrue(
+            (_headers or {}).get('Idempotency-Key'),
+            'the refund must carry an Idempotency-Key: %s' % (_headers,))
 
     def test_refund_closes_a_refund_transaction(self):
         """The child refund transaction is confirmed and carries the amount."""
@@ -228,8 +232,8 @@ class TestNexiReview(TransactionCase):
         tx._set_done()
         calls = []
 
-        def fake(method, url, payload=None, params=None):
-            calls.append((method, url, payload))
+        def fake(method, url, payload=None, params=None, extra_headers=None):
+            calls.append((method, url, payload, extra_headers))
             # Captured 120 cents, the transaction asks 1000.
             return self._refund_answer(tx.reference, '120')
 
@@ -252,8 +256,8 @@ class TestNexiReview(TransactionCase):
         tx._set_done()
         calls = []
 
-        def fake(method, url, payload=None, params=None):
-            calls.append((method, url, payload))
+        def fake(method, url, payload=None, params=None, extra_headers=None):
+            calls.append((method, url, payload, extra_headers))
             return self._refund_answer(tx.reference, '120', refunded)
 
         with patch.object(type(self.provider), '_nexi_make_request', side_effect=fake):
@@ -267,8 +271,8 @@ class TestNexiReview(TransactionCase):
         tx._set_done()
         calls = []
 
-        def fake(method, url, payload=None, params=None):
-            calls.append((method, url, payload))
+        def fake(method, url, payload=None, params=None, extra_headers=None):
+            calls.append((method, url, payload, extra_headers))
             raise ValidationError('Nexi: unreachable')
 
         with patch.object(type(self.provider), '_nexi_make_request', side_effect=fake):

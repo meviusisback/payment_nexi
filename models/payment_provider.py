@@ -539,9 +539,13 @@ class PaymentProviderNexi(models.Model):
             return self.env.ref('payment_nexi.redirect_form')
         return super()._get_redirect_form_view(is_validation=is_validation)
 
-    def _nexi_make_request(self, method, url, payload=None, params=None):
+    def _nexi_make_request(self, method, url, payload=None, params=None,
+                           extra_headers=None):
         """Call Nexi over REST JSON. Simple, with timeouts.
 
+        :param extra_headers: additional headers for this call only (e.g. the
+            ``Idempotency-Key`` a refund needs). They are added to the fixed set,
+            never replacing the key that authenticates.
         :raise NexiUnavailable: Nexi did not answer or the response is unreadable.
         :raise ValidationError: Nexi answered with an error of its own.
         """
@@ -555,6 +559,9 @@ class PaymentProviderNexi(models.Model):
             'X-Api-Key': self.nexi_api_key or '',
             'Correlation-Id': str(uuid.uuid4()),
         }
+        for name, value in (extra_headers or {}).items():
+            if name not in headers:
+                headers[str(name)] = str(value)
         started = time.monotonic()
         deadline = started + NEXI_TOTAL_TIMEOUT
 

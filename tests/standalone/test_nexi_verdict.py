@@ -397,8 +397,21 @@ class RefundableOperationTest(unittest.TestCase):
         self.assertEqual(operation.get('operationType'), 'CAPTURE')
         self.assertEqual(available, 1000)
 
-    def test_authorization_only_is_not_refundable(self):
-        """An authorization is not money taken: giving it back is a void."""
+    def test_authorization_only_is_addressable_when_money_was_taken(self):
+        """HPP with automatic capture reports the AUTHORIZATION, not a CAPTURE.
+
+        The money is in ``orderStatus.capturedAmount``: that is what makes it
+        refundable, and the authorization is the operation to address.
+        """
+        data = answer(1000, [
+            op('AUTHORIZATION', 'EXECUTED', '2026-11-14T10:00:00'),
+        ])
+        operation, available = V.refundable_operation(data, ORDER, 'EUR')
+        self.assertEqual(operation.get('operationType'), 'AUTHORIZATION')
+        self.assertEqual(available, 1000)
+
+    def test_authorization_with_no_captured_money_is_not_refundable(self):
+        """An authorization that took nothing has nothing to give back."""
         data = answer(None, [
             op('AUTHORIZATION', 'EXECUTED', '2026-11-14T10:00:00'),
         ])

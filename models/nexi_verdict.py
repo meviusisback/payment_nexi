@@ -331,11 +331,14 @@ def reversed_after_capture(data, capture_op, currency=None):
 def refundable_operation(data, order_ref, currency=None):
     """The operation a refund must reference, and how much can still go back.
 
-    Nexi refunds are addressed to the operation that took the money
-    (``POST /operations/{operationId}/refunds``), not to the order: the order is
-    only read here to work out what is left. That operation is the CAPTURE; an
-    AUTHORIZATION is not money taken, so it is not refundable and giving it back
-    is a void, a different call the caller decides about.
+    Nexi refunds are addressed to an operation (``POST /operations/{operationId}/
+    refunds``), not to the order, and the order is only read here to work out what
+    is left. Which operation that is depends on how the terminal captures: with
+    an explicit capture it is the CAPTURE, while an HPP with automatic capture
+    reports the AUTHORIZATION only and puts the money taken in
+    ``orderStatus.capturedAmount``. So the capture is preferred and the
+    authorization is the fallback, and the amount still decides: an operation
+    with no captured money anywhere is not refundable.
 
     :param data: the gateway answer about ``order_ref``.
     :param order_ref: the order this must be about: an answer about another
@@ -351,7 +354,8 @@ def refundable_operation(data, order_ref, currency=None):
     data = data if isinstance(data, dict) else {}
     if not got_order_id(data) or got_order_id(data) != order_ref:
         return {}, 0
-    operation = latest_operation(data, CAPTURE_OPS, OK_RESULTS)
+    operation = (latest_operation(data, CAPTURE_OPS, OK_RESULTS)
+                 or latest_operation(data, AUTH_OPS, OK_RESULTS))
     operation = operation if isinstance(operation, dict) else {}
     if not operation:
         return {}, 0

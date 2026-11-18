@@ -5,6 +5,7 @@ import logging
 import re
 import secrets
 import time
+import uuid
 from datetime import timedelta
 from urllib.parse import parse_qsl, quote, urlencode, urlparse
 
@@ -87,6 +88,20 @@ def _nexi_verify_url(provider, order_ref):
     if '/orders/hpp' in create_url:
         return create_url.replace('/orders/hpp', f'/orders/{quote(order_ref, safe="")}')
     return create_url.rstrip('/') + f'/orders/{quote(order_ref, safe="")}'
+
+
+# Fixed namespace for refund idempotency keys. The same refund — same reference,
+# same operation, same amount — always derives the same key, so a retry of a
+# request that did go through cannot take the money twice.
+_NEXI_IDEMPOTENCY_NAMESPACE = uuid.UUID('6f1b0d7e-3c1a-5b7e-9f2a-1d4c8e0a7b3f')
+
+
+def _nexi_refund_idempotency_key(reference, operation_id, cents):
+    """Stable ``Idempotency-Key`` for one refund. Nexi refuses a refund without it."""
+    return str(uuid.uuid5(
+        _NEXI_IDEMPOTENCY_NAMESPACE,
+        f'refund|{reference}|{operation_id}|{cents}',
+    ))
 
 
 def _nexi_session_choice():
@@ -1199,20 +1214,26 @@ class PaymentTransactionNexi(models.Model):
         refund_tx = super()._send_refund_request(
             amount_to_refund=amount_to_refund,
         )
-        url = provider._nexi_refund_url(operation.get('operationId'))
+        operation_id = operation.get('operationId')
+        url = provider._nexi_refund_url(operation_id)
         try:
             provider._nexi_make_request('POST', url, payload={
                 'amount': str(wanted),
                 'currency': currency,
                 'description': _nexi_sanitize_text(self.reference, 255),
+            }, extra_headers={
+                # Nexi refuses a refund without it (PS0074), and a derived key
+                # makes a retry of the same refund harmless.
+                'Idempotency-Key': _nexi_refund_idempotency_key(
+                    self.reference, operation_id, wanted),
             })
         except ValidationError:
             _logger.warning(
                 'Nexi refund %s refused by the gateway (operation %s)',
-                self.reference, operation.get('operationId'))
+                self.reference, operation_id)
             raise
         _logger.info(
             'Nexi refund %s: %s cents on operation %s',
-            self.reference, wanted, operation.get('operationId'))
+            self.reference, wanted, operation_id)
         refund_tx._set_done(state_message=_('Nexi: refunded %s cents.') % wanted)
         return refund_tx
