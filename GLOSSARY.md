@@ -56,7 +56,16 @@ and asking again in the same pass is worth it. Distinct from `uncertain`: one is
 a wait, the other is a doubt.
 
 **Amount mismatch** — more money was taken than the order asked for. Never
-closed automatically: a human refunds it from the Nexi back office.
+closed automatically: a human decides, and refunds it from Odoo or from the
+Nexi back office.
+
+**Refund** — money given back, addressed to the operation that took it
+(`POST /operations/{operationId}/refunds`): the CAPTURE, or the AUTHORIZATION
+when Nexi captured on its own and only reports `orderStatus.capturedAmount`.
+The ceiling is read from the gateway before anything is sent — captured minus
+already given back — so a refund made elsewhere counts and the same money
+cannot leave twice. Each request carries a derived `Idempotency-Key`, which
+Nexi requires and which makes a retry of the same refund harmless.
 
 ## Amounts
 
