@@ -4,11 +4,11 @@
 
 **Odoo 18 payment provider for Nexi XPay Web (REST API with `X-Api-Key`): Hosted Page redirect or embedded card fields at checkout. Odoo never sees the card number.**
 
+[![Release](https://img.shields.io/github/v/release/meviusisback/payment_nexi)](https://github.com/meviusisback/payment_nexi/releases)
 [![License: LGPL-3](https://img.shields.io/github/license/meviusisback/payment_nexi)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.4.12-blue)
 ![Linux](https://img.shields.io/badge/linux-supported-1793d1)
 
-![Nexi XPay Web checkout: payment methods with brand logos](static/description/checkout.png)
+![Nexi XPay Web at the Odoo checkout: Apple Pay, Google Pay, Card and PayPal, card selected](static/description/checkout.png)
 
 </div>
 
@@ -118,7 +118,7 @@ Every transaction carries a random code (`tok`): without the right code the publ
 ```
 payment_nexi/
 ├── __init__.py                     # installation hook
-├── __manifest__.py                 # version 1.4.12, depends, data files
+├── __manifest__.py                 # version, depends, data files
 ├── controllers/main.py             # Nexi return + Build routes
 ├── data/payment_method_data.xml    # payment methods (Nexi-only codes; shared ones come from the core)
 ├── i18n/it.po                      # Italian translation (English msgids in the code)
