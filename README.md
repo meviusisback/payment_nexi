@@ -4,11 +4,11 @@
 
 **Odoo 18 payment provider for Nexi XPay Web (REST API with `X-Api-Key`): Hosted Page redirect or embedded card fields at checkout. Odoo never sees the card number.**
 
+[![Release](https://img.shields.io/github/v/release/meviusisback/payment_nexi)](https://github.com/meviusisback/payment_nexi/releases)
 [![License: LGPL-3](https://img.shields.io/github/license/meviusisback/payment_nexi)](LICENSE)
-![Version](https://img.shields.io/github/v/release/meviusisback/payment_nexi?label=version&color=blue)
 ![Linux](https://img.shields.io/badge/linux-supported-1793d1)
 
-![Nexi XPay Web checkout: payment methods with brand logos](static/description/checkout.png)
+![Nexi XPay Web at the Odoo checkout: Apple Pay, Google Pay, Card and PayPal, card selected](static/description/checkout.png)
 
 </div>
 
